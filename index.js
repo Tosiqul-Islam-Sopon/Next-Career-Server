@@ -42,7 +42,7 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/user/:email", async (req, res) =>{
+    app.get("/user/:email", async (req, res) => {
       const email = req.params.email;
       const user = await userCollection.findOne({ email });
       res.send(user);
@@ -56,10 +56,20 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/jobs", async (req, res) =>{
+    app.get("/jobs", async (req, res) => {
       const jobs = await jobCollection.find().toArray();
       res.send(jobs);
     })
+
+    app.get('/jobs/featuredJobs', async (req, res) => {
+      
+      const topJobs = await jobCollection.find({})
+        .sort({ view: -1 })
+        .limit(10)
+        .toArray();
+
+      res.send(topJobs);
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
@@ -73,9 +83,9 @@ run().catch(console.dir);
 
 
 app.get('/', (req, res) => {
-    res.send("Job is listing..............");
+  res.send("Job is listing..............");
 })
 
-app.listen(port, () =>{
-    console.log(`Job listing on port ${port}`);
+app.listen(port, () => {
+  console.log(`Job listing on port ${port}`);
 })
