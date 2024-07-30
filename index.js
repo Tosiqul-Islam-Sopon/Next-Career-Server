@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
 
 const app = express();
@@ -12,7 +12,8 @@ app.use(cors());
 
 
 
-const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.nnvexxr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+// const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.nnvexxr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+const uri = `mongodb://localhost:27017`
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
@@ -27,7 +28,8 @@ async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
-    const database = client.db("Job-Listing");
+    // const database = client.db("Job-Listing");
+    const database = client.db("job-listing");
     const userCollection = database.collection("users");
     const jobCollection = database.collection("jobs");
 
@@ -42,11 +44,44 @@ async function run() {
       res.send(result);
     });
 
+
+    app.patch('/user/:id', async (req, res) => {
+      const userId = req.params.id;
+      const updateData = req.body;
+
+      if (!ObjectId.isValid(userId)) {
+        return res.status(400).send('Invalid user ID');
+      }
+
+      try {
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(userId) },
+          { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send('User not found');
+        }
+
+        res.send('User info updated successfully');
+      } catch (err) {
+        console.error('Error updating user info:', err);
+        res.status(500).send('Internal Server Error');
+      }
+    });
+
+    app.get("/users", async (req, res) => {
+      const users = await userCollection.find().toArray();
+      res.send(users);
+    })
+
     app.get("/user/:email", async (req, res) => {
       const email = req.params.email;
       const user = await userCollection.findOne({ email });
       res.send(user);
     })
+
+    
 
 
 
@@ -57,12 +92,21 @@ async function run() {
     });
 
     app.get("/jobs", async (req, res) => {
-      const jobs = await jobCollection.find().toArray();
-      res.send(jobs);
-    })
+      try {
+        const currentDate = new Date().toISOString();
+        console.log(currentDate);
+        const query = { deadline: { $gt: currentDate } };
+        const jobs = await jobCollection.find(query).toArray();
+        res.send(jobs);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ error: "Internal Server Error" });
+      }
+    });
+
 
     app.get('/jobs/featuredJobs', async (req, res) => {
-      
+
       const topJobs = await jobCollection.find({})
         .sort({ view: -1 })
         .limit(10)
@@ -70,6 +114,12 @@ async function run() {
 
       res.send(topJobs);
     });
+
+    app.get("/jobs/job/:jobId", async (req, res) => {
+      const jobId = req.params.jobId;
+      const job = await jobCollection.findOne({ _id: new ObjectId(jobId) });
+      res.send(job);
+    })
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
