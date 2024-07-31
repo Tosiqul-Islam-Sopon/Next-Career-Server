@@ -70,6 +70,36 @@ async function run() {
       }
     });
 
+    app.patch('/user/:id/education', async (req, res) => {
+      const userId = req.params.id;
+      const educationData = req.body;
+
+      if (!ObjectId.isValid(userId)) {
+        return res.status(400).send('Invalid user ID');
+      }
+
+      if (!educationData._id) {
+        educationData._id = new ObjectId();
+      }
+
+      try {
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(userId) },
+          { $push: { education: educationData } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send('User not found');
+        }
+
+        res.send('Education data added successfully');
+      } catch (err) {
+        console.error('Error adding education data:', err);
+        res.status(500).send('Internal Server Error');
+      }
+    });
+
+
     app.get("/users", async (req, res) => {
       const users = await userCollection.find().toArray();
       res.send(users);
@@ -81,7 +111,6 @@ async function run() {
       res.send(user);
     })
 
-    
 
 
 
