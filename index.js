@@ -1,6 +1,9 @@
 const express = require('express');
 const cors = require('cors');
+const multer = require('multer');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
@@ -12,8 +15,8 @@ app.use(cors());
 
 
 
-// const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.nnvexxr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
-const uri = `mongodb://localhost:27017`
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.nnvexxr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+// const uri = `mongodb://localhost:27017`
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
@@ -24,14 +27,34 @@ const client = new MongoClient(uri, {
   }
 });
 
+let db, resumesCollection;
+
+client.connect().then(() => {
+  db = client.db("Job-Listing");
+  resumesCollection = db.collection('resumes');
+  console.log("Connected to MongoDB and collection initialized");
+});
+
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'uploads/') // Specify the directory where files will be saved
+  },
+  filename: function (req, file, cb) {
+    cb(null, `resume_${Date.now()}${path.extname(file.originalname)}`) // Save file with a unique name
+  }
+});
+
+const upload = multer({ storage });
+
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
-    // const database = client.db("Job-Listing");
-    const database = client.db("job-listing");
+    // await client.connect();
+    const database = client.db("Job-Listing");
+    // const database = client.db("job-listing");
     const userCollection = database.collection("users");
     const jobCollection = database.collection("jobs");
+    const resumeCollection = database.collection("resumes");
 
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -44,16 +67,52 @@ async function run() {
       res.send(result);
     });
 
+    app.post('/user/:id/resume', upload.single('resume'), async (req, res) => {
+      const userId = req.params.id;
+
+      if (!ObjectId.isValid(userId)) {
+        return res.status(400).send('Invalid user ID');
+      }
+
+      if (!req.file) {
+        return res.status(400).send('No file uploaded');
+      }
+
+      try {
+        console.log('Uploaded file:', req.file);
+        const resume = {
+          userId: new ObjectId(userId),
+          filename: req.file.filename,
+          path: req.file.path,
+          uploadDate: new Date()
+        };
+
+        const result = await resumesCollection.insertOne(resume);
+
+        res.send({ message: 'Resume uploaded successfully', resumeId: result.insertedId });
+      } catch (err) {
+        console.error('Error uploading resume:', err);
+        res.status(500).send('Internal Server Error');
+      }
+    });
 
     app.patch('/user/:id', async (req, res) => {
       const userId = req.params.id;
-      const updateData = req.body;
+      const { name, email, role, ...personalInfo } = req.body; // Destructure the data from the request body
 
       if (!ObjectId.isValid(userId)) {
         return res.status(400).send('Invalid user ID');
       }
 
       try {
+        // Build the update object
+        const updateData = {
+          ...personalInfo && { personalInfo }, // Only include personalInfo if it's provided
+          ...(name && { name }),
+          ...(email && { email }),
+          ...(role && { role })
+        };
+
         const result = await userCollection.updateOne(
           { _id: new ObjectId(userId) },
           { $set: updateData }
@@ -78,10 +137,6 @@ async function run() {
         return res.status(400).send('Invalid user ID');
       }
 
-      if (!educationData._id) {
-        educationData._id = new ObjectId();
-      }
-
       try {
         const result = await userCollection.updateOne(
           { _id: new ObjectId(userId) },
@@ -99,6 +154,30 @@ async function run() {
       }
     });
 
+    app.patch('/user/:id/experience', async (req, res) => {
+      const userId = req.params.id;
+      const experienceData = req.body;
+
+      if (!ObjectId.isValid(userId)) {
+        return res.status(400).send('Invalid user ID');
+      }
+
+      try {
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(userId) },
+          { $push: { experience: experienceData } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send('User not found');
+        }
+
+        res.send('Experience data added successfully');
+      } catch (err) {
+        console.error('Error adding experience data:', err);
+        res.status(500).send('Internal Server Error');
+      }
+    });
 
     app.get("/users", async (req, res) => {
       const users = await userCollection.find().toArray();
@@ -110,6 +189,87 @@ async function run() {
       const user = await userCollection.findOne({ email });
       res.send(user);
     })
+
+    app.get('/user/:id/resume', async (req, res) => {
+      const userId = req.params.id;
+
+      if (!ObjectId.isValid(userId)) {
+        return res.status(400).send('Invalid user ID');
+      }
+
+      try {
+        const resume = await resumesCollection.findOne({ userId: new ObjectId(userId) });
+
+        if (!resume) {
+          return res.status(404).send('Resume not found');
+        }
+
+        res.download(resume.path, resume.filename);
+      } catch (err) {
+        console.error('Error retrieving resume:', err);
+        res.status(500).send('Internal Server Error');
+      }
+    });
+
+    app.get('/user/:id/has-resume', async (req, res) => {
+      const userId = req.params.id;
+
+      if (!ObjectId.isValid(userId)) {
+        return res.status(400).send({ hasResume: false, message: "Invalid user ID" });
+      }
+
+      try {
+        const resume = await resumesCollection.findOne({ userId: new ObjectId(userId) });
+
+        if (resume) {
+          return res.send({ hasResume: true });
+        } else {
+          return res.send({ hasResume: false });
+        }
+      } catch (error) {
+        console.error("Error checking for resume:", error);
+        return res.status(500).send({ hasResume: false, message: "Internal server error" });
+      }
+    });
+
+    app.delete('/user/:id/resume', async (req, res) => {
+      const userId = req.params.id;
+
+      if (!ObjectId.isValid(userId)) {
+        return res.status(400).send({ message: 'Invalid user ID' });
+      }
+
+      try {
+        // Find the resume document in the collection
+        const resume = await resumesCollection.findOne({ userId: new ObjectId(userId) });
+
+        if (!resume) {
+          return res.status(404).send({ message: 'Resume not found' });
+        }
+
+        // Delete the resume document from the collection
+        const deleteResult = await resumesCollection.deleteOne({ userId: new ObjectId(userId) });
+
+        if (deleteResult.deletedCount === 0) {
+          return res.status(500).send({ message: 'Failed to delete resume from database' });
+        }
+
+        // Delete the file from the disk
+        const filePath = path.join(__dirname, 'uploads', resume.filename);
+        fs.unlink(filePath, (err) => {
+          if (err) {
+            console.error('Error deleting file:', err);
+            return res.status(500).send({ message: 'Failed to delete file from disk' });
+          }
+
+          res.send({ message: 'Resume deleted successfully' });
+        });
+
+      } catch (error) {
+        console.error('Error deleting resume:', error);
+        res.status(500).send({ message: 'Internal Server Error' });
+      }
+    });
 
 
 
