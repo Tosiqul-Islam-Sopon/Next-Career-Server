@@ -31,6 +31,7 @@ let db, resumesCollection;
 
 client.connect().then(() => {
   db = client.db("Job-Listing");
+  // db = client.db("job-listing")
   resumesCollection = db.collection('resumes');
   console.log("Connected to MongoDB and collection initialized");
 });
@@ -54,7 +55,6 @@ async function run() {
     // const database = client.db("job-listing");
     const userCollection = database.collection("users");
     const jobCollection = database.collection("jobs");
-    const resumeCollection = database.collection("resumes");
 
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -279,6 +279,46 @@ async function run() {
       const result = await jobCollection.insertOne(job);
       res.send(result);
     });
+
+    app.patch('/jobs/apply', async (req, res) => {
+      const { userId, jobId } = req.body;
+
+      if (!ObjectId.isValid(userId) || !ObjectId.isValid(jobId)) {
+        return res.status(400).send({ message: "Invalid user or job ID" });
+      }
+
+      try {
+        // Find the job document
+        const job = await jobCollection.findOne({ _id: new ObjectId(jobId) });
+
+        if (!job) {
+          return res.status(404).send({ message: "Job not found" });
+        }
+
+        // Check if the user has already applied
+        const hasApplied = job.appliedUsers?.includes(userId);
+
+        if (hasApplied) {
+          return res.status(400).send({ message: "You have already applied for this job" });
+        }
+
+        // Add the userId to the appliedUsers array
+        const updatedJob = await jobCollection.updateOne(
+          { _id: new ObjectId(jobId) },
+          { $push: { appliedUsers: userId } }
+        );
+
+        if (updatedJob.modifiedCount === 1) {
+          return res.status(200).send({ message: "Application submitted successfully" });
+        } else {
+          return res.status(500).send({ message: "Failed to apply for the job" });
+        }
+      } catch (error) {
+        console.error('Error applying for job:', error);
+        return res.status(500).send({ message: "Failed to apply for the job" });
+      }
+    });
+
 
     app.get("/jobs", async (req, res) => {
       try {
