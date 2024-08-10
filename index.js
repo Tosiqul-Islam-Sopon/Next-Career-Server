@@ -319,6 +319,36 @@ async function run() {
       }
     });
 
+    // Import ObjectId if not already imported
+    const { ObjectId } = require('mongodb');
+
+    // Increment view count for a specific job
+    app.patch('/jobs/incrementView/:id', async (req, res) => {
+      const jobId = req.params.id;
+
+      if (!ObjectId.isValid(jobId)) {
+        return res.status(400).send({ message: "Invalid job ID" });
+      }
+
+      try {
+        // Increment the view count by 1
+        const result = await jobCollection.updateOne(
+          { _id: new ObjectId(jobId) },
+          { $inc: { view: 1 } }
+        );
+
+        if (result.modifiedCount === 0) {
+          return res.status(404).send({ message: "Job not found or view count not updated" });
+        }
+
+        res.status(200).send({ message: "View count incremented successfully" });
+      } catch (error) {
+        console.error('Error incrementing view count:', error);
+        res.status(500).send({ message: "Failed to increment view count" });
+      }
+    });
+
+
 
     app.get("/jobs", async (req, res) => {
       try {
@@ -349,6 +379,30 @@ async function run() {
       const job = await jobCollection.findOne({ _id: new ObjectId(jobId) });
       res.send(job);
     })
+
+    app.get('/jobs/appliedJobs/:userId', async (req, res) => {
+      const { userId } = req.params;
+
+      if (!ObjectId.isValid(userId)) {
+        return res.status(400).send({ message: "Invalid user ID" });
+      }
+
+      try {
+        // Find all jobs where the user has applied
+        const appliedJobs = await jobCollection.find({ appliedUsers: userId }).toArray();
+
+        if (appliedJobs.length === 0) {
+          return res.status(404).send({ message: "No jobs found that the user has applied for" });
+        }
+
+        // Return the list of jobs
+        return res.status(200).json(appliedJobs);
+      } catch (error) {
+        console.error('Error retrieving applied jobs:', error);
+        return res.status(500).send({ message: "Failed to retrieve applied jobs" });
+      }
+    });
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
