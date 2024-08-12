@@ -296,16 +296,20 @@ async function run() {
         }
 
         // Check if the user has already applied
-        const hasApplied = job.appliedUsers?.includes(userId);
+        const hasApplied = job.appliedUsers?.some(user => user.userId === userId);
 
         if (hasApplied) {
           return res.status(400).send({ message: "You have already applied for this job" });
         }
 
-        // Add the userId to the appliedUsers array
+        // Add the userId with the appliedOn date to the appliedUsers array
         const updatedJob = await jobCollection.updateOne(
           { _id: new ObjectId(jobId) },
-          { $push: { appliedUsers: userId } }
+          {
+            $push: {
+              appliedUsers: { userId, appliedOn: new Date().toISOString() }
+            }
+          }
         );
 
         if (updatedJob.modifiedCount === 1) {
@@ -319,8 +323,6 @@ async function run() {
       }
     });
 
-    // Import ObjectId if not already imported
-    const { ObjectId } = require('mongodb');
 
     // Increment view count for a specific job
     app.patch('/jobs/incrementView/:id', async (req, res) => {
@@ -363,6 +365,27 @@ async function run() {
       }
     });
 
+    app.get('/jobs/categoriesVacancy', async (req, res) => {
+      try {
+        const jobs = await jobCollection.aggregate([
+          {
+            $group: {
+              _id: "$jobCategory",
+              vacancies: { $sum: 1 } // Count the number of vacancies in each category
+            }
+          },
+          {
+            $sort: { vacancies: -1 } // Sort by the number of vacancies in descending order
+          }
+        ]).toArray();
+
+        res.status(200).json(jobs);
+      } catch (error) {
+        console.error('Error fetching jobs:', error);
+        res.status(500).json({ message: 'Error fetching jobs', error });
+      }
+    });
+
 
     app.get('/jobs/featuredJobs', async (req, res) => {
 
@@ -389,7 +412,9 @@ async function run() {
 
       try {
         // Find all jobs where the user has applied
-        const appliedJobs = await jobCollection.find({ appliedUsers: userId }).toArray();
+        const appliedJobs = await jobCollection.find({
+          appliedUsers: { $elemMatch: { userId } } // Check if userId exists in any object within the array
+        }).toArray();
 
         if (appliedJobs.length === 0) {
           return res.status(404).send({ message: "No jobs found that the user has applied for" });
@@ -402,6 +427,20 @@ async function run() {
         return res.status(500).send({ message: "Failed to retrieve applied jobs" });
       }
     });
+
+
+    app.get('/jobs/category/:category', async (req, res) => {
+      const category = req.params.category;
+
+      try {
+        const jobs = await jobCollection.find({ jobCategory: category }).toArray();
+        res.send(jobs);
+      } catch (error) {
+        console.error('Error fetching jobs by category:', error);
+        res.status(500).send({ message: 'Internal Server Error' });
+      }
+    });
+
 
 
     // Send a ping to confirm a successful connection
