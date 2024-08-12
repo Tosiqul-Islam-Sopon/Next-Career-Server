@@ -352,18 +352,50 @@ async function run() {
 
 
 
-    app.get("/jobs", async (req, res) => {
+    app.get('/jobs', async (req, res) => {
       try {
-        const currentDate = new Date().toISOString();
-        console.log(currentDate);
-        const query = { deadline: { $gt: currentDate } };
-        const jobs = await jobCollection.find(query).toArray();
-        res.send(jobs);
+        const { searchTitle, searchCompany, category, sortCriteria, jobType, jobLocation, page = 1, limit = 15 } = req.query;
+
+        const filter = {};
+
+        if (searchTitle) {
+          filter.jobTitle = { $regex: new RegExp(searchTitle, 'i') };
+        }
+        if (searchCompany) {
+          filter['companyInfo.companyName'] = { $regex: new RegExp(searchCompany, 'i') };
+        }
+        if (category) {
+          filter.jobCategory = category;
+        }
+        if (jobType) {
+          if (jobType === 'Full Time' || jobType === 'Part Time') {
+            query.jobType = jobType;
+          }
+          else {
+            query.jobLocation = jobType;
+          }
+        }
+
+        let jobs = await jobCollection.find(filter)
+          .sort(sortCriteria ? { [sortCriteria]: -1 } : {})
+          .skip((page - 1) * limit)
+          .limit(parseInt(limit))
+          .toArray();
+
+        const totalJobs = await jobCollection.countDocuments(filter);
+
+        res.status(200).json({
+          jobs,
+          totalPages: Math.ceil(totalJobs / limit),
+          currentPage: parseInt(page),
+        });
       } catch (error) {
-        console.error(error);
-        res.status(500).send({ error: "Internal Server Error" });
+        console.error('Error fetching jobs:', error);
+        res.status(500).json({ message: 'Error fetching jobs', error });
       }
     });
+
+
 
     app.get('/jobs/categoriesVacancy', async (req, res) => {
       try {
