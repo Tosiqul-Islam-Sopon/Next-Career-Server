@@ -271,6 +271,22 @@ async function run() {
       }
     });
 
+    app.get("/user/userRole/:email", async (req, res) => {
+      const email = req.params.email;
+      try {
+        const user = await userCollection.findOne({ email });
+        if (user && user.role) {
+          res.send(user.role);
+        } else {
+          res.status(404).send({ message: "User role not found" });
+        }
+      } catch (error) {
+        console.error("Error fetching user role:", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+
 
 
 
@@ -350,8 +366,6 @@ async function run() {
       }
     });
 
-
-
     app.get('/jobs', async (req, res) => {
       try {
         const { searchTitle, searchCompany, category, sortCriteria, jobType, jobLocation, page = 1, limit = 15 } = req.query;
@@ -395,19 +409,17 @@ async function run() {
       }
     });
 
-
-
     app.get('/jobs/categoriesVacancy', async (req, res) => {
       try {
         const jobs = await jobCollection.aggregate([
           {
             $group: {
               _id: "$jobCategory",
-              vacancies: { $sum: 1 } // Count the number of vacancies in each category
+              totalVacancy: { $sum: { $toInt: "$vacancy" } } // Convert vacancy to integer and sum
             }
           },
           {
-            $sort: { vacancies: -1 } // Sort by the number of vacancies in descending order
+            $sort: { totalVacancy: -1 } // Sort by the number of vacancies in descending order
           }
         ]).toArray();
 
@@ -418,16 +430,64 @@ async function run() {
       }
     });
 
-
     app.get('/jobs/featuredJobs', async (req, res) => {
+      const page = parseInt(req.query.page) || 1;  // Default to first page
+      const limit = parseInt(req.query.limit) || 10;  // Default to 10 jobs per page
+      const skip = (page - 1) * limit;  // Calculate the number of documents to skip
 
-      const topJobs = await jobCollection.find({})
-        .sort({ view: -1 })
-        .limit(10)
-        .toArray();
+      try {
+        // Fetch the total number of jobs
+        const totalJobs = await jobCollection.countDocuments();
+        const totalPages = Math.ceil(totalJobs / limit);  // Calculate total pages
 
-      res.send(topJobs);
+        // Fetch the jobs for the current page
+        const topJobs = await jobCollection.find({})
+          .sort({ view: -1 })
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        // Send jobs along with pagination information
+        res.send({
+          jobs: topJobs,
+          totalPages,
+          currentPage: page
+        });
+      } catch (error) {
+        console.error("Failed to fetch featured jobs", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
     });
+
+    app.get('/jobs/newestJobs', async (req, res) => {
+      const page = parseInt(req.query.page) || 1;  // Default to first page
+      const limit = parseInt(req.query.limit) || 10;  // Default to 10 jobs per page
+      const skip = (page - 1) * limit;  // Calculate the number of documents to skip
+
+      try {
+        // Fetch the total number of jobs
+        const totalJobs = await jobCollection.countDocuments();
+        const totalPages = Math.ceil(totalJobs / limit);  // Calculate total pages
+
+        // Fetch the jobs for the current page sorted by upload date (newest first)
+        const newestJobs = await jobCollection.find({})
+          .sort({ date: -1 })  // Sort by 'date' in descending order
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        // Send jobs along with pagination information
+        res.send({
+          jobs: newestJobs,
+          totalPages,
+          currentPage: page
+        });
+      } catch (error) {
+        console.error("Failed to fetch newest jobs", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
 
     app.get("/jobs/job/:jobId", async (req, res) => {
       const jobId = req.params.jobId;
@@ -460,7 +520,6 @@ async function run() {
       }
     });
 
-
     app.get('/jobs/category/:category', async (req, res) => {
       const category = req.params.category;
 
@@ -470,6 +529,27 @@ async function run() {
       } catch (error) {
         console.error('Error fetching jobs by category:', error);
         res.status(500).send({ message: 'Internal Server Error' });
+      }
+    });
+
+    app.get("/jobs/myPostedJobs/:email", async (req, res) => {
+      const email = req.params.email;
+
+      try {
+        // Fetch jobs from the jobCollection where the userInfo.email matches the provided email
+        const jobs = await jobCollection.find({ 'userInfo.email': email }).toArray();
+
+        // Check if jobs were found
+        if (jobs.length === 0) {
+          return res.status(404).send({ message: "No jobs found for this user." });
+        }
+
+        // Send the jobs as the response
+        res.status(200).send(jobs);
+      } catch (error) {
+        // Handle errors and send a 500 status code
+        console.error("Error fetching jobs:", error);
+        res.status(500).send({ message: "Server error. Please try again later." });
       }
     });
 
