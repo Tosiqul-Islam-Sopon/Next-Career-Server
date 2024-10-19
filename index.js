@@ -55,6 +55,8 @@ async function run() {
     // const database = client.db("job-listing");
     const userCollection = database.collection("users");
     const jobCollection = database.collection("jobs");
+    const applicationCollection = database.collection("applications");
+
 
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -211,7 +213,7 @@ async function run() {
       }
     });
 
-    app.get('/user/:id/has-resume', async (req, res) => {
+    app.get('/user/:id/hasResume', async (req, res) => {
       const userId = req.params.id;
 
       if (!ObjectId.isValid(userId)) {
@@ -294,49 +296,6 @@ async function run() {
       const job = req.body;
       const result = await jobCollection.insertOne(job);
       res.send(result);
-    });
-
-    app.patch('/jobs/apply', async (req, res) => {
-      const { userId, jobId } = req.body;
-
-      if (!ObjectId.isValid(userId) || !ObjectId.isValid(jobId)) {
-        return res.status(400).send({ message: "Invalid user or job ID" });
-      }
-
-      try {
-        // Find the job document
-        const job = await jobCollection.findOne({ _id: new ObjectId(jobId) });
-
-        if (!job) {
-          return res.status(404).send({ message: "Job not found" });
-        }
-
-        // Check if the user has already applied
-        const hasApplied = job.appliedUsers?.some(user => user.userId === userId);
-
-        if (hasApplied) {
-          return res.status(400).send({ message: "You have already applied for this job" });
-        }
-
-        // Add the userId with the appliedOn date to the appliedUsers array
-        const updatedJob = await jobCollection.updateOne(
-          { _id: new ObjectId(jobId) },
-          {
-            $push: {
-              appliedUsers: { userId, appliedOn: new Date().toISOString() }
-            }
-          }
-        );
-
-        if (updatedJob.modifiedCount === 1) {
-          return res.status(200).send({ message: "Application submitted successfully" });
-        } else {
-          return res.status(500).send({ message: "Failed to apply for the job" });
-        }
-      } catch (error) {
-        console.error('Error applying for job:', error);
-        return res.status(500).send({ message: "Failed to apply for the job" });
-      }
     });
 
 
@@ -552,6 +511,166 @@ async function run() {
         res.status(500).send({ message: "Server error. Please try again later." });
       }
     });
+
+    app.get('/jobs/appliedUsers/:id', async (req, res) => {
+      try {
+          const jobId = req.params.id;
+  
+          // Find the job by _id and get appliedUsers
+          const job = await jobCollection.findOne({ _id: new ObjectId(jobId) });
+          
+          if (!job) {
+              return res.status(404).json({ message: 'Job not found' });
+          }
+  
+          // Return the appliedUsers array
+          res.json({ appliedUsers: job.appliedUsers });
+      } catch (error) {
+          console.error('Error retrieving applied users:', error);
+          res.status(500).json({ message: 'Internal Server Error' });
+      }
+  });
+
+
+
+
+
+  app.post('/jobs/apply', async (req, res) => {
+    const { userId, jobId } = req.body;
+  
+    // Validate ObjectId format
+    if (!ObjectId.isValid(userId)) {
+      return res.status(400).send({ message: "Invalid user ID" });
+    }
+  
+    if (!ObjectId.isValid(jobId)) {
+      return res.status(400).send({ message: "Invalid job ID" });
+    }
+  
+    try {
+      // Check if an application already exists for this job
+      const application = await applicationCollection.findOne({ jobId });
+  
+      if (application) {
+        // If application exists, update it by pushing new user into appliedUsers array
+        const updatedApplication = await applicationCollection.updateOne(
+          { jobId },  // Filter: find the correct job application
+          {
+            $push: {
+              appliedUsers: {
+                userId,
+                appliedOn: new Date().toISOString()
+              }
+            }
+          }
+        );
+  
+        // Check if the update was successful
+        if (updatedApplication.modifiedCount === 1) {
+          return res.status(200).send({ message: "Application submitted successfully" });
+        } else {
+          return res.status(500).send({ message: "Failed to apply for the job" });
+        }
+      } else {
+        // If no application exists, create a new one
+        const newApplication = {
+          jobId,
+          appliedUsers: [
+            {
+              userId,
+              appliedOn: new Date().toISOString()
+            }
+          ]
+        };
+  
+        const result = await applicationCollection.insertOne(newApplication);
+  
+        // If the insert was successful
+        if (result.acknowledged) {
+          return res.status(200).send({ message: "Application submitted successfully" });
+        } else {
+          console.error("error from else");
+          return res.status(500).send({ message: "Failed to apply for the job" });
+        }
+      }
+    } catch (error) {
+      console.error('Error applying for job:', error);
+      return res.status(500).send({ message: "Failed to apply for the job" });
+    }
+  });
+
+  app.get('/jobs/checkApplication', async (req, res) => {
+    const { userId, jobId } = req.query;  // Use req.query to get query params
+  
+    // Validate ObjectId format
+    if (!ObjectId.isValid(userId)) {
+        return res.status(400).send({ message: "Invalid user ID" });
+    }
+
+    if (!ObjectId.isValid(jobId)) {
+        return res.status(400).send({ message: "Invalid job ID" });
+    }
+
+    try {
+        // Check if an application already exists for the specific job and user
+        const application = await applicationCollection.findOne({
+            jobId,
+            "appliedUsers.userId": userId  // Query the specific userId inside the appliedUsers array
+        });
+
+        if (application) {
+            // User has already applied for this job
+            return res.send(true);
+        } else {
+            // User has not applied for this job
+            return res.send(false);
+        }
+    } catch (error) {
+        console.error('Error checking application status:', error);
+        return res.status(500).send({ message: "Failed to check application status" });
+    }
+  });
+
+  app.get('/jobs/applicants/:jobId', async (req, res) => {
+    const { jobId } = req.params;
+  
+    if (!ObjectId.isValid(jobId)) {
+        return res.status(400).send({ message: "Invalid job ID" });
+    }
+  
+    try {
+        // Fetch job application and applicants from the 'applications' collection
+        const application = await applicationCollection.findOne({ jobId });
+  
+        if (!application) {
+            return res.status(404).send({ message: "No applications found for this job" });
+        }
+  
+        // Extract user IDs from the appliedUsers array
+        const userIds = application.appliedUsers.map(applicant => new ObjectId(applicant.userId));
+  
+        // Fetch full user details from the 'users' collection
+        const users = await userCollection.find({ _id: { $in: userIds } }).toArray();
+  
+        // Combine user details with the corresponding application details
+        const detailedApplicants = application.appliedUsers.map(applicant => {
+            const user = users.find(u => u._id.toString() === applicant.userId.toString());
+            return {
+                ...user, // Spread user details
+                appliedOn: applicant.appliedOn // Add the appliedOn field from the application
+            };
+        });
+  
+        return res.status(200).send(detailedApplicants);
+    } catch (error) {
+        console.error('Error fetching applicants:', error);
+        return res.status(500).send({ message: "Failed to fetch applicants" });
+    }
+  });
+
+
+  
+  
 
 
 
