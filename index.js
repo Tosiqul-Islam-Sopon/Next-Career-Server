@@ -1,10 +1,11 @@
-const express = require('express');
-const cors = require('cors');
-const multer = require('multer');
-const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
-const path = require('path');
-const fs = require('fs');
-require('dotenv').config();
+const express = require("express");
+const cors = require("cors");
+const multer = require("multer");
+const { GridFsStorage } = require("multer-gridfs-storage");
+const GridFSBucket = require("mongodb").GridFSBucket;
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const path = require("path");
+require("dotenv").config();
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -12,10 +13,7 @@ const port = process.env.PORT || 5000;
 app.use(express.json());
 app.use(cors());
 
-
-
-
-const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.nnvexxr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.nnvexxr.mongodb.net/${process.env.DB_NAME}?retryWrites=true&w=majority&appName=Cluster0`;
 // const uri = `mongodb://localhost:27017`
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -24,25 +22,36 @@ const client = new MongoClient(uri, {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
-  }
-});
-
-let db, resumesCollection;
-
-client.connect().then(() => {
-  db = client.db("Job-Listing");
-  // db = client.db("job-listing")
-  resumesCollection = db.collection('resumes');
-  console.log("Connected to MongoDB and collection initialized");
-});
-
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, 'uploads/') // Specify the directory where files will be saved
   },
-  filename: function (req, file, cb) {
-    cb(null, `resume_${Date.now()}${path.extname(file.originalname)}`) // Save file with a unique name
-  }
+});
+
+let resumesCollection;
+let gfs, gridfsBucket;
+
+client
+  .connect()
+  .then(() => {
+    const db = client.db(process.env.DB_NAME);
+    gridfsBucket = new GridFSBucket(db, {
+      bucketName: "resumes", // Specify 'resumes' as the bucket name
+    });
+    gfs = gridfsBucket; // Assign to global variable for use in other parts of the app
+    console.log("GridFSBucket initialized");
+  })
+  .catch((error) => {
+    console.error("Error connecting to MongoDB:", error);
+  });
+
+const storage = new GridFsStorage({
+  url: uri,
+  file: (req, file) => {
+    const userId = req.params.userId;
+    return {
+      bucketName: "resumes",
+      filename: `${Date.now()}-${file.originalname}`, // Naming the file with a timestamp to avoid duplicates
+      metadata: { userId: new ObjectId(userId) },
+    };
+  },
 });
 
 const upload = multer({ storage });
@@ -57,6 +66,92 @@ async function run() {
     const jobCollection = database.collection("jobs");
     const applicationCollection = database.collection("applications");
 
+    // File upload route
+    app.post("/uploadResume/:userId", upload.single("file"), (req, res) => {
+      const userId = req.params.userId;
+
+      if (!ObjectId.isValid(userId)) {
+        return res.status(400).send("Invalid user ID");
+      }
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      res.status(200).json({ message: "Resume uploaded successfully" });
+    });
+
+    // Serve file download route
+    app.get("/allResumes", async (req, res) => {
+      try {
+        const files = await gfs.find().toArray();
+        if (!files || files.length === 0) {
+          return res.status(404).json({ message: "No resumes found" });
+        }
+
+        const filesData = files.map((file) => ({
+          _id: file._id,
+          filename: file.filename,
+          contentType: file.contentType,
+          uploadDate: file.uploadDate,
+        }));
+
+        res.status(200).json(filesData);
+      } catch (error) {
+        console.error("Error fetching resumes:", error);
+        res.status(500).json({ message: "Failed to retrieve resumes" });
+      }
+    });
+
+    app.get("/resume/:userId", async (req, res) => {
+      const userId = req.params.userId;
+
+      if (!ObjectId.isValid(userId)) {
+        return res.status(400).json({ message: "Invalid user ID" });
+      }
+
+      try {
+        // Find the file associated with the userId in the metadata
+        const files = await gfs
+          .find({ "metadata.userId": new ObjectId(userId) })
+          .toArray();
+
+        if (!files || files.length === 0) {
+          return res
+            .status(404)
+            .json({ message: "No file found for this user" });
+        }
+
+        // If multiple files exist, pick the most recent (or handle as needed)
+        const file = files[0]; // Assuming we fetch the first file (modify as per your logic)
+
+        // Stream the file content back to the client
+        const readStream = gfs.openDownloadStreamByName(file.filename);
+        readStream.pipe(res);
+      } catch (error) {
+        console.error("Error retrieving file:", error);
+        res.status(500).json({ message: "Error retrieving file" });
+      }
+    });
+
+    app.get("/resume/file/:fileName", async (req, res) => {
+      const userId = req.params.userId;
+      try {
+        const file = await gfs
+          .find({ filename: req.params.filename })
+          .toArray();
+        if (!file || file.length === 0) {
+          return res.status(404).json({ message: "File not found" });
+        }
+
+        const readStream = gfs.openDownloadStreamByName(req.params.filename);
+        readStream.pipe(res);
+      } catch (error) {
+        console.error("Error retrieving file:", error);
+        res.status(500).json({ message: "Error retrieving file" });
+      }
+    });
+
+    // user related api
 
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -69,50 +164,52 @@ async function run() {
       res.send(result);
     });
 
-    app.post('/user/:id/resume', upload.single('resume'), async (req, res) => {
+    app.post("/user/:id/resume", upload.single("resume"), async (req, res) => {
       const userId = req.params.id;
 
       if (!ObjectId.isValid(userId)) {
-        return res.status(400).send('Invalid user ID');
+        return res.status(400).send("Invalid user ID");
       }
 
       if (!req.file) {
-        return res.status(400).send('No file uploaded');
+        return res.status(400).send("No file uploaded");
       }
 
       try {
-        console.log('Uploaded file:', req.file);
+        console.log("Uploaded file:", req.file);
         const resume = {
           userId: new ObjectId(userId),
           filename: req.file.filename,
-          path: req.file.path,
-          uploadDate: new Date()
+          uploadDate: new Date(),
         };
 
         const result = await resumesCollection.insertOne(resume);
 
-        res.send({ message: 'Resume uploaded successfully', resumeId: result.insertedId });
+        res.send({
+          message: "Resume uploaded successfully",
+          resumeId: result.insertedId,
+        });
       } catch (err) {
-        console.error('Error uploading resume:', err);
-        res.status(500).send('Internal Server Error');
+        console.error("Error uploading resume:", err);
+        res.status(500).send("Internal Server Error");
       }
     });
 
-    app.patch('/user/:id', async (req, res) => {
+    app.patch("/user/:id", async (req, res) => {
       const userId = req.params.id;
       const { name, email, role, ...personalInfo } = req.body; // Destructure the data from the request body
 
       if (!ObjectId.isValid(userId)) {
-        return res.status(400).send('Invalid user ID');
+        return res.status(400).send("Invalid user ID");
       }
 
       try {
         // Build the update object
         const updateData = {
-          ...personalInfo && { personalInfo }, // Only include personalInfo if it's provided
+          ...(personalInfo && { personalInfo }), // Only include personalInfo if it's provided
           ...(name && { name }),
           ...(email && { email }),
-          ...(role && { role })
+          ...(role && { role }),
         };
 
         const result = await userCollection.updateOne(
@@ -121,22 +218,22 @@ async function run() {
         );
 
         if (result.matchedCount === 0) {
-          return res.status(404).send('User not found');
+          return res.status(404).send("User not found");
         }
 
-        res.send('User info updated successfully');
+        res.send("User info updated successfully");
       } catch (err) {
-        console.error('Error updating user info:', err);
-        res.status(500).send('Internal Server Error');
+        console.error("Error updating user info:", err);
+        res.status(500).send("Internal Server Error");
       }
     });
 
-    app.patch('/user/:id/education', async (req, res) => {
+    app.patch("/user/:id/education", async (req, res) => {
       const userId = req.params.id;
       const educationData = req.body;
 
       if (!ObjectId.isValid(userId)) {
-        return res.status(400).send('Invalid user ID');
+        return res.status(400).send("Invalid user ID");
       }
 
       try {
@@ -146,22 +243,22 @@ async function run() {
         );
 
         if (result.matchedCount === 0) {
-          return res.status(404).send('User not found');
+          return res.status(404).send("User not found");
         }
 
-        res.send('Education data added successfully');
+        res.send("Education data added successfully");
       } catch (err) {
-        console.error('Error adding education data:', err);
-        res.status(500).send('Internal Server Error');
+        console.error("Error adding education data:", err);
+        res.status(500).send("Internal Server Error");
       }
     });
 
-    app.patch('/user/:id/experience', async (req, res) => {
+    app.patch("/user/:id/experience", async (req, res) => {
       const userId = req.params.id;
       const experienceData = req.body;
 
       if (!ObjectId.isValid(userId)) {
-        return res.status(400).send('Invalid user ID');
+        return res.status(400).send("Invalid user ID");
       }
 
       try {
@@ -171,57 +268,86 @@ async function run() {
         );
 
         if (result.matchedCount === 0) {
-          return res.status(404).send('User not found');
+          return res.status(404).send("User not found");
         }
 
-        res.send('Experience data added successfully');
+        res.send("Experience data added successfully");
       } catch (err) {
-        console.error('Error adding experience data:', err);
-        res.status(500).send('Internal Server Error');
+        console.error("Error adding experience data:", err);
+        res.status(500).send("Internal Server Error");
       }
     });
 
     app.get("/users", async (req, res) => {
       const users = await userCollection.find().toArray();
       res.send(users);
-    })
+    });
+
+    app.get("/user/:userId", async (req, res) => {
+      const userId = req.params.userId;
+      // Check if userId is a valid ObjectId
+      if (!ObjectId.isValid(userId)) {
+        return res.status(400).send({ error: "Invalid user ID format" });
+      }
+
+      try {
+        const user = await userCollection.findOne({
+          _id: new ObjectId(userId),
+        });
+
+        if (!user) {
+          return res.status(404).send({ error: "User not found" });
+        }
+
+        res.send(user);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ error: "Internal Server Error" });
+      }
+    });
 
     app.get("/user/:email", async (req, res) => {
       const email = req.params.email;
       const user = await userCollection.findOne({ email });
       res.send(user);
-    })
+    });
 
-    app.get('/user/:id/resume', async (req, res) => {
+    app.get("/user/:id/resume", async (req, res) => {
       const userId = req.params.id;
 
       if (!ObjectId.isValid(userId)) {
-        return res.status(400).send('Invalid user ID');
+        return res.status(400).send("Invalid user ID");
       }
 
       try {
-        const resume = await resumesCollection.findOne({ userId: new ObjectId(userId) });
+        const resume = await resumesCollection.findOne({
+          userId: new ObjectId(userId),
+        });
 
         if (!resume) {
-          return res.status(404).send('Resume not found');
+          return res.status(404).send("Resume not found");
         }
 
         res.download(resume.path, resume.filename);
       } catch (err) {
-        console.error('Error retrieving resume:', err);
-        res.status(500).send('Internal Server Error');
+        console.error("Error retrieving resume:", err);
+        res.status(500).send("Internal Server Error");
       }
     });
 
-    app.get('/user/:id/hasResume', async (req, res) => {
+    app.get("/user/:id/hasResume", async (req, res) => {
       const userId = req.params.id;
 
       if (!ObjectId.isValid(userId)) {
-        return res.status(400).send({ hasResume: false, message: "Invalid user ID" });
+        return res
+          .status(400)
+          .send({ hasResume: false, message: "Invalid user ID" });
       }
 
       try {
-        const resume = await resumesCollection.findOne({ userId: new ObjectId(userId) });
+        const resume = await resumesCollection.findOne({
+          userId: new ObjectId(userId),
+        });
 
         if (resume) {
           return res.send({ hasResume: true });
@@ -230,46 +356,55 @@ async function run() {
         }
       } catch (error) {
         console.error("Error checking for resume:", error);
-        return res.status(500).send({ hasResume: false, message: "Internal server error" });
+        return res
+          .status(500)
+          .send({ hasResume: false, message: "Internal server error" });
       }
     });
 
-    app.delete('/user/:id/resume', async (req, res) => {
+    app.delete("/user/:id/resume", async (req, res) => {
       const userId = req.params.id;
 
       if (!ObjectId.isValid(userId)) {
-        return res.status(400).send({ message: 'Invalid user ID' });
+        return res.status(400).send({ message: "Invalid user ID" });
       }
 
       try {
         // Find the resume document in the collection
-        const resume = await resumesCollection.findOne({ userId: new ObjectId(userId) });
+        const resume = await resumesCollection.findOne({
+          userId: new ObjectId(userId),
+        });
 
         if (!resume) {
-          return res.status(404).send({ message: 'Resume not found' });
+          return res.status(404).send({ message: "Resume not found" });
         }
 
         // Delete the resume document from the collection
-        const deleteResult = await resumesCollection.deleteOne({ userId: new ObjectId(userId) });
+        const deleteResult = await resumesCollection.deleteOne({
+          userId: new ObjectId(userId),
+        });
 
         if (deleteResult.deletedCount === 0) {
-          return res.status(500).send({ message: 'Failed to delete resume from database' });
+          return res
+            .status(500)
+            .send({ message: "Failed to delete resume from database" });
         }
 
         // Delete the file from the disk
-        const filePath = path.join(__dirname, 'uploads', resume.filename);
+        const filePath = path.join(__dirname, "uploads", resume.filename);
         fs.unlink(filePath, (err) => {
           if (err) {
-            console.error('Error deleting file:', err);
-            return res.status(500).send({ message: 'Failed to delete file from disk' });
+            console.error("Error deleting file:", err);
+            return res
+              .status(500)
+              .send({ message: "Failed to delete file from disk" });
           }
 
-          res.send({ message: 'Resume deleted successfully' });
+          res.send({ message: "Resume deleted successfully" });
         });
-
       } catch (error) {
-        console.error('Error deleting resume:', error);
-        res.status(500).send({ message: 'Internal Server Error' });
+        console.error("Error deleting resume:", error);
+        res.status(500).send({ message: "Internal Server Error" });
       }
     });
 
@@ -288,19 +423,14 @@ async function run() {
       }
     });
 
-
-
-
-
     app.post("/jobs", async (req, res) => {
       const job = req.body;
       const result = await jobCollection.insertOne(job);
       res.send(result);
     });
 
-
     // Increment view count for a specific job
-    app.patch('/jobs/incrementView/:id', async (req, res) => {
+    app.patch("/jobs/incrementView/:id", async (req, res) => {
       const jobId = req.params.id;
 
       if (!ObjectId.isValid(jobId)) {
@@ -315,41 +445,56 @@ async function run() {
         );
 
         if (result.modifiedCount === 0) {
-          return res.status(404).send({ message: "Job not found or view count not updated" });
+          return res
+            .status(404)
+            .send({ message: "Job not found or view count not updated" });
         }
 
-        res.status(200).send({ message: "View count incremented successfully" });
+        res
+          .status(200)
+          .send({ message: "View count incremented successfully" });
       } catch (error) {
-        console.error('Error incrementing view count:', error);
+        console.error("Error incrementing view count:", error);
         res.status(500).send({ message: "Failed to increment view count" });
       }
     });
 
-    app.get('/jobs', async (req, res) => {
+    app.get("/jobs", async (req, res) => {
       try {
-        const { searchTitle, searchCompany, category, sortCriteria, jobType, jobLocation, page = 1, limit = 15 } = req.query;
+        const {
+          searchTitle,
+          searchCompany,
+          category,
+          sortCriteria,
+          jobType,
+          jobLocation,
+          page = 1,
+          limit = 15,
+        } = req.query;
 
         const filter = {};
 
         if (searchTitle) {
-          filter.jobTitle = { $regex: new RegExp(searchTitle, 'i') };
+          filter.jobTitle = { $regex: new RegExp(searchTitle, "i") };
         }
         if (searchCompany) {
-          filter['companyInfo.companyName'] = { $regex: new RegExp(searchCompany, 'i') };
+          filter["companyInfo.companyName"] = {
+            $regex: new RegExp(searchCompany, "i"),
+          };
         }
         if (category) {
           filter.jobCategory = category;
         }
         if (jobType) {
-          if (jobType === 'Full Time' || jobType === 'Part Time') {
+          if (jobType === "Full Time" || jobType === "Part Time") {
             query.jobType = jobType;
-          }
-          else {
+          } else {
             query.jobLocation = jobType;
           }
         }
 
-        let jobs = await jobCollection.find(filter)
+        let jobs = await jobCollection
+          .find(filter)
           .sort(sortCriteria ? { [sortCriteria]: -1 } : {})
           .skip((page - 1) * limit)
           .limit(parseInt(limit))
@@ -363,44 +508,47 @@ async function run() {
           currentPage: parseInt(page),
         });
       } catch (error) {
-        console.error('Error fetching jobs:', error);
-        res.status(500).json({ message: 'Error fetching jobs', error });
+        console.error("Error fetching jobs:", error);
+        res.status(500).json({ message: "Error fetching jobs", error });
       }
     });
 
-    app.get('/jobs/categoriesVacancy', async (req, res) => {
+    app.get("/jobs/categoriesVacancy", async (req, res) => {
       try {
-        const jobs = await jobCollection.aggregate([
-          {
-            $group: {
-              _id: "$jobCategory",
-              totalVacancy: { $sum: { $toInt: "$vacancy" } } // Convert vacancy to integer and sum
-            }
-          },
-          {
-            $sort: { totalVacancy: -1 } // Sort by the number of vacancies in descending order
-          }
-        ]).toArray();
+        const jobs = await jobCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$jobCategory",
+                totalVacancy: { $sum: { $toInt: "$vacancy" } }, // Convert vacancy to integer and sum
+              },
+            },
+            {
+              $sort: { totalVacancy: -1 }, // Sort by the number of vacancies in descending order
+            },
+          ])
+          .toArray();
 
         res.status(200).json(jobs);
       } catch (error) {
-        console.error('Error fetching jobs:', error);
-        res.status(500).json({ message: 'Error fetching jobs', error });
+        console.error("Error fetching jobs:", error);
+        res.status(500).json({ message: "Error fetching jobs", error });
       }
     });
 
-    app.get('/jobs/featuredJobs', async (req, res) => {
-      const page = parseInt(req.query.page) || 1;  // Default to first page
-      const limit = parseInt(req.query.limit) || 10;  // Default to 10 jobs per page
-      const skip = (page - 1) * limit;  // Calculate the number of documents to skip
+    app.get("/jobs/featuredJobs", async (req, res) => {
+      const page = parseInt(req.query.page) || 1; // Default to first page
+      const limit = parseInt(req.query.limit) || 10; // Default to 10 jobs per page
+      const skip = (page - 1) * limit; // Calculate the number of documents to skip
 
       try {
         // Fetch the total number of jobs
         const totalJobs = await jobCollection.countDocuments();
-        const totalPages = Math.ceil(totalJobs / limit);  // Calculate total pages
+        const totalPages = Math.ceil(totalJobs / limit); // Calculate total pages
 
         // Fetch the jobs for the current page
-        const topJobs = await jobCollection.find({})
+        const topJobs = await jobCollection
+          .find({})
           .sort({ view: -1 })
           .skip(skip)
           .limit(limit)
@@ -410,7 +558,7 @@ async function run() {
         res.send({
           jobs: topJobs,
           totalPages,
-          currentPage: page
+          currentPage: page,
         });
       } catch (error) {
         console.error("Failed to fetch featured jobs", error);
@@ -418,19 +566,20 @@ async function run() {
       }
     });
 
-    app.get('/jobs/newestJobs', async (req, res) => {
-      const page = parseInt(req.query.page) || 1;  // Default to first page
-      const limit = parseInt(req.query.limit) || 10;  // Default to 10 jobs per page
-      const skip = (page - 1) * limit;  // Calculate the number of documents to skip
+    app.get("/jobs/newestJobs", async (req, res) => {
+      const page = parseInt(req.query.page) || 1; // Default to first page
+      const limit = parseInt(req.query.limit) || 10; // Default to 10 jobs per page
+      const skip = (page - 1) * limit; // Calculate the number of documents to skip
 
       try {
         // Fetch the total number of jobs
         const totalJobs = await jobCollection.countDocuments();
-        const totalPages = Math.ceil(totalJobs / limit);  // Calculate total pages
+        const totalPages = Math.ceil(totalJobs / limit); // Calculate total pages
 
         // Fetch the jobs for the current page sorted by upload date (newest first)
-        const newestJobs = await jobCollection.find({})
-          .sort({ date: -1 })  // Sort by 'date' in descending order
+        const newestJobs = await jobCollection
+          .find({})
+          .sort({ date: -1 }) // Sort by 'date' in descending order
           .skip(skip)
           .limit(limit)
           .toArray();
@@ -439,7 +588,7 @@ async function run() {
         res.send({
           jobs: newestJobs,
           totalPages,
-          currentPage: page
+          currentPage: page,
         });
       } catch (error) {
         console.error("Failed to fetch newest jobs", error);
@@ -447,14 +596,13 @@ async function run() {
       }
     });
 
-
     app.get("/jobs/job/:jobId", async (req, res) => {
       const jobId = req.params.jobId;
       const job = await jobCollection.findOne({ _id: new ObjectId(jobId) });
       res.send(job);
-    })
+    });
 
-    app.get('/jobs/appliedJobs/:userId', async (req, res) => {
+    app.get("/jobs/appliedJobs/:userId", async (req, res) => {
       const { userId } = req.params;
 
       if (!ObjectId.isValid(userId)) {
@@ -463,31 +611,39 @@ async function run() {
 
       try {
         // Find all jobs where the user has applied
-        const appliedJobs = await jobCollection.find({
-          appliedUsers: { $elemMatch: { userId } } // Check if userId exists in any object within the array
-        }).toArray();
+        const appliedJobs = await jobCollection
+          .find({
+            appliedUsers: { $elemMatch: { userId } }, // Check if userId exists in any object within the array
+          })
+          .toArray();
 
         if (appliedJobs.length === 0) {
-          return res.status(404).send({ message: "No jobs found that the user has applied for" });
+          return res
+            .status(404)
+            .send({ message: "No jobs found that the user has applied for" });
         }
 
         // Return the list of jobs
         return res.status(200).json(appliedJobs);
       } catch (error) {
-        console.error('Error retrieving applied jobs:', error);
-        return res.status(500).send({ message: "Failed to retrieve applied jobs" });
+        console.error("Error retrieving applied jobs:", error);
+        return res
+          .status(500)
+          .send({ message: "Failed to retrieve applied jobs" });
       }
     });
 
-    app.get('/jobs/category/:category', async (req, res) => {
+    app.get("/jobs/category/:category", async (req, res) => {
       const category = req.params.category;
 
       try {
-        const jobs = await jobCollection.find({ jobCategory: category }).toArray();
+        const jobs = await jobCollection
+          .find({ jobCategory: category })
+          .toArray();
         res.send(jobs);
       } catch (error) {
-        console.error('Error fetching jobs by category:', error);
-        res.status(500).send({ message: 'Internal Server Error' });
+        console.error("Error fetching jobs by category:", error);
+        res.status(500).send({ message: "Internal Server Error" });
       }
     });
 
@@ -496,11 +652,15 @@ async function run() {
 
       try {
         // Fetch jobs from the jobCollection where the userInfo.email matches the provided email
-        const jobs = await jobCollection.find({ 'userInfo.email': email }).toArray();
+        const jobs = await jobCollection
+          .find({ "userInfo.email": email })
+          .toArray();
 
         // Check if jobs were found
         if (jobs.length === 0) {
-          return res.status(404).send({ message: "No jobs found for this user." });
+          return res
+            .status(404)
+            .send({ message: "No jobs found for this user." });
         }
 
         // Send the jobs as the response
@@ -508,175 +668,187 @@ async function run() {
       } catch (error) {
         // Handle errors and send a 500 status code
         console.error("Error fetching jobs:", error);
-        res.status(500).send({ message: "Server error. Please try again later." });
+        res
+          .status(500)
+          .send({ message: "Server error. Please try again later." });
       }
     });
 
-    app.get('/jobs/appliedUsers/:id', async (req, res) => {
+    app.get("/jobs/appliedUsers/:id", async (req, res) => {
       try {
-          const jobId = req.params.id;
-  
-          // Find the job by _id and get appliedUsers
-          const job = await jobCollection.findOne({ _id: new ObjectId(jobId) });
-          
-          if (!job) {
-              return res.status(404).json({ message: 'Job not found' });
-          }
-  
-          // Return the appliedUsers array
-          res.json({ appliedUsers: job.appliedUsers });
+        const jobId = req.params.id;
+
+        // Find the job by _id and get appliedUsers
+        const job = await jobCollection.findOne({ _id: new ObjectId(jobId) });
+
+        if (!job) {
+          return res.status(404).json({ message: "Job not found" });
+        }
+
+        // Return the appliedUsers array
+        res.json({ appliedUsers: job.appliedUsers });
       } catch (error) {
-          console.error('Error retrieving applied users:', error);
-          res.status(500).json({ message: 'Internal Server Error' });
+        console.error("Error retrieving applied users:", error);
+        res.status(500).json({ message: "Internal Server Error" });
       }
-  });
+    });
 
+    app.post("/jobs/apply", async (req, res) => {
+      const { userId, jobId } = req.body;
 
-
-
-
-  app.post('/jobs/apply', async (req, res) => {
-    const { userId, jobId } = req.body;
-  
-    // Validate ObjectId format
-    if (!ObjectId.isValid(userId)) {
-      return res.status(400).send({ message: "Invalid user ID" });
-    }
-  
-    if (!ObjectId.isValid(jobId)) {
-      return res.status(400).send({ message: "Invalid job ID" });
-    }
-  
-    try {
-      // Check if an application already exists for this job
-      const application = await applicationCollection.findOne({ jobId });
-  
-      if (application) {
-        // If application exists, update it by pushing new user into appliedUsers array
-        const updatedApplication = await applicationCollection.updateOne(
-          { jobId },  // Filter: find the correct job application
-          {
-            $push: {
-              appliedUsers: {
-                userId,
-                appliedOn: new Date().toISOString()
-              }
-            }
-          }
-        );
-  
-        // Check if the update was successful
-        if (updatedApplication.modifiedCount === 1) {
-          return res.status(200).send({ message: "Application submitted successfully" });
-        } else {
-          return res.status(500).send({ message: "Failed to apply for the job" });
-        }
-      } else {
-        // If no application exists, create a new one
-        const newApplication = {
-          jobId,
-          appliedUsers: [
-            {
-              userId,
-              appliedOn: new Date().toISOString()
-            }
-          ]
-        };
-  
-        const result = await applicationCollection.insertOne(newApplication);
-  
-        // If the insert was successful
-        if (result.acknowledged) {
-          return res.status(200).send({ message: "Application submitted successfully" });
-        } else {
-          console.error("error from else");
-          return res.status(500).send({ message: "Failed to apply for the job" });
-        }
-      }
-    } catch (error) {
-      console.error('Error applying for job:', error);
-      return res.status(500).send({ message: "Failed to apply for the job" });
-    }
-  });
-
-  app.get('/jobs/checkApplication', async (req, res) => {
-    const { userId, jobId } = req.query;  // Use req.query to get query params
-  
-    // Validate ObjectId format
-    if (!ObjectId.isValid(userId)) {
+      // Validate ObjectId format
+      if (!ObjectId.isValid(userId)) {
         return res.status(400).send({ message: "Invalid user ID" });
-    }
+      }
 
-    if (!ObjectId.isValid(jobId)) {
+      if (!ObjectId.isValid(jobId)) {
         return res.status(400).send({ message: "Invalid job ID" });
-    }
+      }
 
-    try {
+      try {
+        // Check if an application already exists for this job
+        const application = await applicationCollection.findOne({ jobId });
+
+        if (application) {
+          // If application exists, update it by pushing new user into appliedUsers array
+          const updatedApplication = await applicationCollection.updateOne(
+            { jobId }, // Filter: find the correct job application
+            {
+              $push: {
+                appliedUsers: {
+                  userId,
+                  appliedOn: new Date().toISOString(),
+                },
+              },
+            }
+          );
+
+          // Check if the update was successful
+          if (updatedApplication.modifiedCount === 1) {
+            return res
+              .status(200)
+              .send({ message: "Application submitted successfully" });
+          } else {
+            return res
+              .status(500)
+              .send({ message: "Failed to apply for the job" });
+          }
+        } else {
+          // If no application exists, create a new one
+          const newApplication = {
+            jobId,
+            appliedUsers: [
+              {
+                userId,
+                appliedOn: new Date().toISOString(),
+              },
+            ],
+          };
+
+          const result = await applicationCollection.insertOne(newApplication);
+
+          // If the insert was successful
+          if (result.acknowledged) {
+            return res
+              .status(200)
+              .send({ message: "Application submitted successfully" });
+          } else {
+            console.error("error from else");
+            return res
+              .status(500)
+              .send({ message: "Failed to apply for the job" });
+          }
+        }
+      } catch (error) {
+        console.error("Error applying for job:", error);
+        return res.status(500).send({ message: "Failed to apply for the job" });
+      }
+    });
+
+    app.get("/jobs/checkApplication", async (req, res) => {
+      const { userId, jobId } = req.query; // Use req.query to get query params
+
+      // Validate ObjectId format
+      if (!ObjectId.isValid(userId)) {
+        return res.status(400).send({ message: "Invalid user ID" });
+      }
+
+      if (!ObjectId.isValid(jobId)) {
+        return res.status(400).send({ message: "Invalid job ID" });
+      }
+
+      try {
         // Check if an application already exists for the specific job and user
         const application = await applicationCollection.findOne({
-            jobId,
-            "appliedUsers.userId": userId  // Query the specific userId inside the appliedUsers array
+          jobId,
+          "appliedUsers.userId": userId, // Query the specific userId inside the appliedUsers array
         });
 
         if (application) {
-            // User has already applied for this job
-            return res.send(true);
+          // User has already applied for this job
+          return res.send(true);
         } else {
-            // User has not applied for this job
-            return res.send(false);
+          // User has not applied for this job
+          return res.send(false);
         }
-    } catch (error) {
-        console.error('Error checking application status:', error);
-        return res.status(500).send({ message: "Failed to check application status" });
-    }
-  });
+      } catch (error) {
+        console.error("Error checking application status:", error);
+        return res
+          .status(500)
+          .send({ message: "Failed to check application status" });
+      }
+    });
 
-  app.get('/jobs/applicants/:jobId', async (req, res) => {
-    const { jobId } = req.params;
-  
-    if (!ObjectId.isValid(jobId)) {
+    app.get("/jobs/applicants/:jobId", async (req, res) => {
+      const { jobId } = req.params;
+
+      if (!ObjectId.isValid(jobId)) {
         return res.status(400).send({ message: "Invalid job ID" });
-    }
-  
-    try {
+      }
+
+      try {
         // Fetch job application and applicants from the 'applications' collection
         const application = await applicationCollection.findOne({ jobId });
-  
+
         if (!application) {
-            return res.status(404).send({ message: "No applications found for this job" });
+          return res
+            .status(404)
+            .send({ message: "No applications found for this job" });
         }
-  
+
         // Extract user IDs from the appliedUsers array
-        const userIds = application.appliedUsers.map(applicant => new ObjectId(applicant.userId));
-  
+        const userIds = application.appliedUsers.map(
+          (applicant) => new ObjectId(applicant.userId)
+        );
+
         // Fetch full user details from the 'users' collection
-        const users = await userCollection.find({ _id: { $in: userIds } }).toArray();
-  
+        const users = await userCollection
+          .find({ _id: { $in: userIds } })
+          .toArray();
+
         // Combine user details with the corresponding application details
-        const detailedApplicants = application.appliedUsers.map(applicant => {
-            const user = users.find(u => u._id.toString() === applicant.userId.toString());
-            return {
-                ...user, // Spread user details
-                appliedOn: applicant.appliedOn // Add the appliedOn field from the application
-            };
+        const detailedApplicants = application.appliedUsers.map((applicant) => {
+          const user = users.find(
+            (u) => u._id.toString() === applicant.userId.toString()
+          );
+          return {
+            ...user, // Spread user details
+            appliedOn: applicant.appliedOn, // Add the appliedOn field from the application
+          };
         });
-  
+
         return res.status(200).send(detailedApplicants);
-    } catch (error) {
-        console.error('Error fetching applicants:', error);
+      } catch (error) {
+        console.error("Error fetching applicants:", error);
         return res.status(500).send({ message: "Failed to fetch applicants" });
-    }
-  });
-
-
-  
-  
-
-
+      }
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    console.log(
+      "Pinged your deployment. You successfully connected to MongoDB!"
+    );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
@@ -684,11 +856,10 @@ async function run() {
 }
 run().catch(console.dir);
 
-
-app.get('/', (req, res) => {
+app.get("/", (req, res) => {
   res.send("Job is listing..............");
-})
+});
 
 app.listen(port, () => {
   console.log(`Job listing on port ${port}`);
-})
+});
