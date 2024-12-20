@@ -26,23 +26,30 @@ const client = new MongoClient(uri, {
 });
 
 let resumesCollection;
-let gfs, gridfsBucket;
+let gfs, resumeBucket, profileImagesBucket, companyLogosBucket;
 
 client
   .connect()
   .then(() => {
     const db = client.db(process.env.DB_NAME);
-    gridfsBucket = new GridFSBucket(db, {
-      bucketName: "resumes", // Specify 'resumes' as the bucket name
-    });
-    gfs = gridfsBucket; // Assign to global variable for use in other parts of the app
-    console.log("GridFSBucket initialized");
+
+    // Existing bucket for resumes
+    resumeBucket = new GridFSBucket(db, { bucketName: "resumes" });
+
+    // New bucket for user profile images
+    profileImagesBucket = new GridFSBucket(db, { bucketName: "profile_images" });
+
+    // New bucket for company logos
+    companyLogosBucket = new GridFSBucket(db, { bucketName: "company_logos" });
+
+    console.log("GridFSBuckets initialized: resumes, profile_images, company_logos");
   })
   .catch((error) => {
     console.error("Error connecting to MongoDB:", error);
   });
 
-const storage = new GridFsStorage({
+
+const resumeStorage = new GridFsStorage({
   url: uri,
   file: (req, file) => {
     const userId = req.params.userId;
@@ -54,7 +61,31 @@ const storage = new GridFsStorage({
   },
 });
 
-const upload = multer({ storage });
+const profileImageStorage = new GridFsStorage({
+  url: uri,
+  file: (req, file) => {
+    return {
+      bucketName: "profile_images",
+      filename: `${Date.now()}-${file.originalname}`,
+      metadata: { userId: req.params.userId },
+    };
+  },
+});
+
+const companyLogoStorage = new GridFsStorage({
+  url: uri,
+  file: (req, file) => {
+    return {
+      bucketName: "company_logos",
+      filename: `${Date.now()}-${file.originalname}`,
+      metadata: { userId: req.params.userId },
+    };
+  },
+});
+
+const resumeUpload = multer({ storage: resumeStorage });
+const profileImageUpload = multer({ storage: profileImageStorage });
+const companyLogoUpload = multer({ storage: companyLogoStorage });
 
 async function run() {
   try {
@@ -67,7 +98,7 @@ async function run() {
     const applicationCollection = database.collection("applications");
 
     // File upload route
-    app.post("/uploadResume/:userId", upload.single("file"), (req, res) => {
+    app.post("/uploadResume/:userId", resumeUpload.single("file"), (req, res) => {
       const userId = req.params.userId;
 
       if (!ObjectId.isValid(userId)) {
@@ -78,6 +109,22 @@ async function run() {
       }
 
       res.status(200).json({ message: "Resume uploaded successfully" });
+    });
+
+    // Upload user profile image
+    app.post("/uploadProfileImage/:userId", profileImageUpload.single("file"), (req, res) => {
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+      res.status(200).json({ message: "Profile image uploaded successfully" });
+    });
+
+    // Upload company logo
+    app.post("/uploadCompanyLogo/:userId", companyLogoUpload.single("file"), (req, res) => {
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+      res.status(200).json({ message: "Company logo uploaded successfully" });
     });
 
     // Serve file download route
@@ -133,6 +180,64 @@ async function run() {
       }
     });
 
+    // Fetch user profile image
+    app.get("/profileImage/:userId", async (req, res) => {
+      try {
+        const files = await profileImagesBucket
+          .find({ "metadata.userId": req.params.userId })
+          .toArray();
+    
+        if (!files || files.length === 0) {
+          return res.status(404).json({ message: "Profile image not found" });
+        }
+    
+        const file = files[0];
+        res.set("Content-Type", file.contentType); // Set content type dynamically
+        const readStream = profileImagesBucket.openDownloadStreamByName(file.filename);
+        readStream.pipe(res);
+      } catch (error) {
+        console.error("Error retrieving profile image:", error);
+        res.status(500).json({ message: "Error retrieving profile image" });
+      }
+    });    
+
+    // Fetch company logo
+    app.get("/companyLogo/:userId", async (req, res) => {
+      try {
+        // Validate companyId
+        const userId = req.params.userId;
+
+        if (!userId) {
+          return res.status(400).json({ message: "Company ID is required" });
+        }
+
+        // If companyId is stored as ObjectId, validate and convert it
+        // Uncomment this block if ObjectId is used:
+        // if (!ObjectId.isValid(companyId)) {
+        //   return res.status(400).json({ message: "Invalid Company ID format" });
+        // }
+
+        const files = await companyLogosBucket
+          .find({ "metadata.userId": userId }) // Use new ObjectId(companyId) if companyId is stored as ObjectId
+          .toArray();
+
+        if (!files || files.length === 0) {
+          return res.status(404).json({ message: "Company logo not found" });
+        }
+
+        // Serve the most recent file (if multiple exist)
+        const file = files.sort((a, b) => b.uploadDate - a.uploadDate)[0];
+
+        // Set Content-Type header and stream the file
+        res.set("Content-Type", file.contentType);
+        const readStream = companyLogosBucket.openDownloadStreamByName(file.filename);
+        readStream.pipe(res);
+      } catch (error) {
+        console.error("Error retrieving company logo:", error);
+        res.status(500).json({ message: "Error retrieving company logo" });
+      }
+    });
+
     app.get("/resume/file/:fileName", async (req, res) => {
       const userId = req.params.userId;
       try {
@@ -151,8 +256,48 @@ async function run() {
       }
     });
 
-    // user related api
+    // Delete profile image
+    app.delete("/profileImage/:userId", async (req, res) => {
+      try {
+        const files = await profileImagesBucket
+          .find({ "metadata.userId": new ObjectId(req.params.userId) })
+          .toArray();
 
+        if (!files || files.length === 0) {
+          return res.status(404).json({ message: "Profile image not found" });
+        }
+
+        const fileId = files[0]._id;
+        await profileImagesBucket.delete(fileId);
+        res.status(200).json({ message: "Profile image deleted successfully" });
+      } catch (error) {
+        console.error("Error deleting profile image:", error);
+        res.status(500).json({ message: "Error deleting profile image" });
+      }
+    });
+
+    // Delete company logo
+    app.delete("/companyLogo/:companyId", async (req, res) => {
+      try {
+        const files = await companyLogosBucket
+          .find({ "metadata.companyId": new ObjectId(req.params.companyId) })
+          .toArray();
+
+        if (!files || files.length === 0) {
+          return res.status(404).json({ message: "Company logo not found" });
+        }
+
+        const fileId = files[0]._id;
+        await companyLogosBucket.delete(fileId);
+        res.status(200).json({ message: "Company logo deleted successfully" });
+      } catch (error) {
+        console.error("Error deleting company logo:", error);
+        res.status(500).json({ message: "Error deleting company logo" });
+      }
+    });
+
+
+    // user related api
     app.post("/users", async (req, res) => {
       const user = req.body;
       const query = { email: user.email };
@@ -164,7 +309,7 @@ async function run() {
       res.send(result);
     });
 
-    app.post("/user/:id/resume", upload.single("resume"), async (req, res) => {
+    app.post("/user/:id/resume", resumeUpload.single("resume"), async (req, res) => {
       const userId = req.params.id;
 
       if (!ObjectId.isValid(userId)) {
@@ -227,6 +372,38 @@ async function run() {
         res.status(500).send("Internal Server Error");
       }
     });
+
+    app.patch("/recruiter/:id", async (req, res) => {
+      const recruiterId = req.params.id;
+    
+      // Validate recruiterId
+      if (!ObjectId.isValid(recruiterId)) {
+        return res.status(400).json({ message: "Invalid recruiter ID" });
+      }
+    
+      const updates = req.body;
+    
+      // Validate that the request body is not empty
+      if (!updates || Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: "No fields provided for update" });
+      }
+    
+      try {
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(recruiterId) }, // Match by ID
+          { $set: updates } // Update only the provided fields
+        );
+    
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ message: "Recruiter not found" });
+        }
+    
+        res.status(200).json({ message: "Recruiter updated successfully" });
+      } catch (error) {
+        console.error("Error updating recruiter:", error);
+        res.status(500).json({ message: "Error updating recruiter" });
+      }
+    });    
 
     app.patch("/user/:id/education", async (req, res) => {
       const userId = req.params.id;
