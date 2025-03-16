@@ -135,6 +135,7 @@ async function run() {
     const userCollection = database.collection("users");
     const jobCollection = database.collection("jobs");
     const applicationCollection = database.collection("applications");
+    const notificationCollection = database.collection("notifications");
 
     // File upload route
     app.post(
@@ -942,78 +943,6 @@ async function run() {
       }
     });
 
-    app.post("/jobs/apply", async (req, res) => {
-      const { userId, jobId } = req.body;
-
-      // Validate ObjectId format
-      if (!ObjectId.isValid(userId)) {
-        return res.status(400).send({ message: "Invalid user ID" });
-      }
-
-      if (!ObjectId.isValid(jobId)) {
-        return res.status(400).send({ message: "Invalid job ID" });
-      }
-
-      try {
-        // Check if an application already exists for this job
-        const application = await applicationCollection.findOne({ jobId });
-
-        if (application) {
-          // If application exists, update it by pushing new user into appliedUsers array
-          const updatedApplication = await applicationCollection.updateOne(
-            { jobId }, // Filter: find the correct job application
-            {
-              $push: {
-                appliedUsers: {
-                  userId,
-                  appliedOn: new Date().toISOString(),
-                },
-              },
-            }
-          );
-
-          // Check if the update was successful
-          if (updatedApplication.modifiedCount === 1) {
-            return res
-              .status(200)
-              .send({ message: "Application submitted successfully" });
-          } else {
-            return res
-              .status(500)
-              .send({ message: "Failed to apply for the job" });
-          }
-        } else {
-          // If no application exists, create a new one
-          const newApplication = {
-            jobId,
-            appliedUsers: [
-              {
-                userId,
-                appliedOn: new Date().toISOString(),
-              },
-            ],
-          };
-
-          const result = await applicationCollection.insertOne(newApplication);
-
-          // If the insert was successful
-          if (result.acknowledged) {
-            return res
-              .status(200)
-              .send({ message: "Application submitted successfully" });
-          } else {
-            console.error("error from else");
-            return res
-              .status(500)
-              .send({ message: "Failed to apply for the job" });
-          }
-        }
-      } catch (error) {
-        console.error("Error applying for job:", error);
-        return res.status(500).send({ message: "Failed to apply for the job" });
-      }
-    });
-
     // app.post("/jobs/apply", async (req, res) => {
     //   const { userId, jobId } = req.body;
 
@@ -1031,8 +960,9 @@ async function run() {
     //     const application = await applicationCollection.findOne({ jobId });
 
     //     if (application) {
+    //       // If application exists, update it by pushing new user into appliedUsers array
     //       const updatedApplication = await applicationCollection.updateOne(
-    //         { jobId },
+    //         { jobId }, // Filter: find the correct job application
     //         {
     //           $push: {
     //             appliedUsers: {
@@ -1043,23 +973,15 @@ async function run() {
     //         }
     //       );
 
+    //       // Check if the update was successful
     //       if (updatedApplication.modifiedCount === 1) {
-    //         // Retrieve the job poster's user id (assuming you store it in your job document)
-    //         const job = await jobCollection.findOne({ _id: new ObjectId(jobId) });
-    //         const jobPosterId = job?.postedBy; // adjust the field name accordingly
-
-    //         // Notify the job poster via socket if they are online
-    //         if (jobPosterId && onlineUsers[jobPosterId]) {
-    //           io.to(onlineUsers[jobPosterId]).emit("jobApplication", {
-    //             message: "A new application has been submitted for your job",
-    //             jobId,
-    //             applicantId: userId,
-    //           });
-    //         }
-
-    //         return res.status(200).send({ message: "Application submitted successfully" });
+    //         return res
+    //           .status(200)
+    //           .send({ message: "Application submitted successfully" });
     //       } else {
-    //         return res.status(500).send({ message: "Failed to apply for the job" });
+    //         return res
+    //           .status(500)
+    //           .send({ message: "Failed to apply for the job" });
     //       }
     //     } else {
     //       // If no application exists, create a new one
@@ -1075,24 +997,16 @@ async function run() {
 
     //       const result = await applicationCollection.insertOne(newApplication);
 
+    //       // If the insert was successful
     //       if (result.acknowledged) {
-    //         // Retrieve the job poster's user id
-    //         const job = await jobCollection.findOne({ _id: new ObjectId(jobId) });
-    //         const jobPosterId = job?.postedBy; // adjust as needed
-
-    //         // Emit socket notification
-    //         if (jobPosterId && onlineUsers[jobPosterId]) {
-    //           io.to(onlineUsers[jobPosterId]).emit("jobApplication", {
-    //             message: "A new application has been submitted for your job",
-    //             jobId,
-    //             applicantId: userId,
-    //           });
-    //         }
-
-    //         return res.status(200).send({ message: "Application submitted successfully" });
+    //         return res
+    //           .status(200)
+    //           .send({ message: "Application submitted successfully" });
     //       } else {
-    //         console.error("Error in application insertion");
-    //         return res.status(500).send({ message: "Failed to apply for the job" });
+    //         console.error("error from else");
+    //         return res
+    //           .status(500)
+    //           .send({ message: "Failed to apply for the job" });
     //       }
     //     }
     //   } catch (error) {
@@ -1100,6 +1014,111 @@ async function run() {
     //     return res.status(500).send({ message: "Failed to apply for the job" });
     //   }
     // });
+
+    app.post("/jobs/apply", async (req, res) => {
+      const { userId, jobId } = req.body;
+
+      if (!ObjectId.isValid(userId)) {
+        return res.status(400).send({ message: "Invalid user ID" });
+      }
+
+      if (!ObjectId.isValid(jobId)) {
+        return res.status(400).send({ message: "Invalid job ID" });
+      }
+
+      try {
+        const application = await applicationCollection.findOne({ jobId });
+
+        if (application) {
+          const updatedApplication = await applicationCollection.updateOne(
+            { jobId },
+            {
+              $push: {
+                appliedUsers: {
+                  userId,
+                  appliedOn: new Date().toISOString(),
+                },
+              },
+            }
+          );
+
+          if (updatedApplication.modifiedCount === 1) {
+            const job = await jobCollection.findOne({
+              _id: new ObjectId(jobId),
+            });
+            const jobPosterId = job?.postedBy;
+
+            // Build the notification object
+            const notification = {
+              userId: new ObjectId(jobPosterId), // The recipient of the notification
+              type: "jobApplication",
+              message: "A new application has been submitted for your job",
+              data: { jobId, applicantId: userId },
+              isRead: false,
+              createdAt: new Date(),
+            };
+
+            // Store the notification in the database
+            await notificationCollection.insertOne(notification);
+
+            if (jobPosterId && onlineUsers[jobPosterId]) {
+              io.to(onlineUsers[jobPosterId]).emit("jobApplication", {
+                message: "A new application has been submitted for your job",
+                jobId,
+                applicantId: userId,
+              });
+            }
+
+            return res
+              .status(200)
+              .send({ message: "Application submitted successfully" });
+          } else {
+            return res
+              .status(500)
+              .send({ message: "Failed to apply for the job" });
+          }
+        } else {
+          const newApplication = {
+            jobId,
+            appliedUsers: [
+              {
+                userId,
+                appliedOn: new Date().toISOString(),
+              },
+            ],
+          };
+
+          const result = await applicationCollection.insertOne(newApplication);
+
+          if (result.acknowledged) {
+            const job = await jobCollection.findOne({
+              _id: new ObjectId(jobId),
+            });
+            const jobPosterId = job?.postedBy; // Use a consistent field name
+
+            if (jobPosterId && onlineUsers[jobPosterId]) {
+              io.to(onlineUsers[jobPosterId]).emit("jobApplication", {
+                message: "A new application has been submitted for your job",
+                jobId,
+                applicantId: userId,
+              });
+            }
+
+            return res
+              .status(200)
+              .send({ message: "Application submitted successfully" });
+          } else {
+            console.error("Error in application insertion");
+            return res
+              .status(500)
+              .send({ message: "Failed to apply for the job" });
+          }
+        }
+      } catch (error) {
+        console.error("Error applying for job:", error);
+        return res.status(500).send({ message: "Failed to apply for the job" });
+      }
+    });
 
     app.get("/jobs/checkApplication", async (req, res) => {
       const { userId, jobId } = req.query; // Use req.query to get query params
