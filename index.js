@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
+const http = require("http");
 const { GridFsStorage } = require("multer-gridfs-storage");
 const GridFSBucket = require("mongodb").GridFSBucket;
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
@@ -12,6 +13,41 @@ const port = process.env.PORT || 5000;
 
 app.use(express.json());
 app.use(cors());
+
+const server = http.createServer(app);
+
+// Set up Socket.IO server with CORS enabled
+const { Server } = require("socket.io");
+const io = new Server(server, {
+  cors: {
+    origin: "*", // Adjust for your environment
+    methods: ["GET", "POST"],
+  },
+});
+
+// Object to store online users mapping (userId -> socketId)
+const onlineUsers = {};
+
+// Listen for socket connections
+io.on("connection", (socket) => {
+  console.log("Socket connected:", socket.id);
+
+  // When a client registers, store their userId with their socket.id
+  socket.on("register", (userId) => {
+    onlineUsers[userId] = socket.id;
+    console.log(`User ${userId} registered with socket ${socket.id}`);
+  });
+
+  // Cleanup on disconnect
+  socket.on("disconnect", () => {
+    for (const [userId, socketId] of Object.entries(onlineUsers)) {
+      if (socketId === socket.id) {
+        delete onlineUsers[userId];
+        console.log(`User ${userId} disconnected`);
+      }
+    }
+  });
+});
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.nnvexxr.mongodb.net/${process.env.DB_NAME}?retryWrites=true&w=majority&appName=Cluster0`;
 // const uri = `mongodb://localhost:27017`
@@ -37,17 +73,20 @@ client
     resumeBucket = new GridFSBucket(db, { bucketName: "resumes" });
 
     // New bucket for user profile images
-    profileImagesBucket = new GridFSBucket(db, { bucketName: "profile_images" });
+    profileImagesBucket = new GridFSBucket(db, {
+      bucketName: "profile_images",
+    });
 
     // New bucket for company logos
     companyLogosBucket = new GridFSBucket(db, { bucketName: "company_logos" });
 
-    console.log("GridFSBuckets initialized: resumes, profile_images, company_logos");
+    console.log(
+      "GridFSBuckets initialized: resumes, profile_images, company_logos"
+    );
   })
   .catch((error) => {
     console.error("Error connecting to MongoDB:", error);
   });
-
 
 const resumeStorage = new GridFsStorage({
   url: uri,
@@ -98,34 +137,48 @@ async function run() {
     const applicationCollection = database.collection("applications");
 
     // File upload route
-    app.post("/uploadResume/:userId", resumeUpload.single("file"), (req, res) => {
-      const userId = req.params.userId;
+    app.post(
+      "/uploadResume/:userId",
+      resumeUpload.single("file"),
+      (req, res) => {
+        const userId = req.params.userId;
 
-      if (!ObjectId.isValid(userId)) {
-        return res.status(400).send("Invalid user ID");
-      }
-      if (!req.file) {
-        return res.status(400).json({ message: "No file uploaded" });
-      }
+        if (!ObjectId.isValid(userId)) {
+          return res.status(400).send("Invalid user ID");
+        }
+        if (!req.file) {
+          return res.status(400).json({ message: "No file uploaded" });
+        }
 
-      res.status(200).json({ message: "Resume uploaded successfully" });
-    });
+        res.status(200).json({ message: "Resume uploaded successfully" });
+      }
+    );
 
     // Upload user profile image
-    app.post("/uploadProfileImage/:userId", profileImageUpload.single("file"), (req, res) => {
-      if (!req.file) {
-        return res.status(400).json({ message: "No file uploaded" });
+    app.post(
+      "/uploadProfileImage/:userId",
+      profileImageUpload.single("file"),
+      (req, res) => {
+        if (!req.file) {
+          return res.status(400).json({ message: "No file uploaded" });
+        }
+        res
+          .status(200)
+          .json({ message: "Profile image uploaded successfully" });
       }
-      res.status(200).json({ message: "Profile image uploaded successfully" });
-    });
+    );
 
     // Upload company logo
-    app.post("/uploadCompanyLogo/:userId", companyLogoUpload.single("file"), (req, res) => {
-      if (!req.file) {
-        return res.status(400).json({ message: "No file uploaded" });
+    app.post(
+      "/uploadCompanyLogo/:userId",
+      companyLogoUpload.single("file"),
+      (req, res) => {
+        if (!req.file) {
+          return res.status(400).json({ message: "No file uploaded" });
+        }
+        res.status(200).json({ message: "Company logo uploaded successfully" });
       }
-      res.status(200).json({ message: "Company logo uploaded successfully" });
-    });
+    );
 
     // Serve file download route
     app.get("/allResumes", async (req, res) => {
@@ -186,20 +239,22 @@ async function run() {
         const files = await profileImagesBucket
           .find({ "metadata.userId": req.params.userId })
           .toArray();
-    
+
         if (!files || files.length === 0) {
           return res.status(404).json({ message: "Profile image not found" });
         }
-    
+
         const file = files[0];
         res.set("Content-Type", file.contentType); // Set content type dynamically
-        const readStream = profileImagesBucket.openDownloadStreamByName(file.filename);
+        const readStream = profileImagesBucket.openDownloadStreamByName(
+          file.filename
+        );
         readStream.pipe(res);
       } catch (error) {
         console.error("Error retrieving profile image:", error);
         res.status(500).json({ message: "Error retrieving profile image" });
       }
-    });    
+    });
 
     // Fetch company logo
     app.get("/companyLogo/:userId", async (req, res) => {
@@ -230,7 +285,9 @@ async function run() {
 
         // Set Content-Type header and stream the file
         res.set("Content-Type", file.contentType);
-        const readStream = companyLogosBucket.openDownloadStreamByName(file.filename);
+        const readStream = companyLogosBucket.openDownloadStreamByName(
+          file.filename
+        );
         readStream.pipe(res);
       } catch (error) {
         console.error("Error retrieving company logo:", error);
@@ -296,7 +353,6 @@ async function run() {
       }
     });
 
-
     // user related api
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -309,36 +365,40 @@ async function run() {
       res.send(result);
     });
 
-    app.post("/user/:id/resume", resumeUpload.single("resume"), async (req, res) => {
-      const userId = req.params.id;
+    app.post(
+      "/user/:id/resume",
+      resumeUpload.single("resume"),
+      async (req, res) => {
+        const userId = req.params.id;
 
-      if (!ObjectId.isValid(userId)) {
-        return res.status(400).send("Invalid user ID");
+        if (!ObjectId.isValid(userId)) {
+          return res.status(400).send("Invalid user ID");
+        }
+
+        if (!req.file) {
+          return res.status(400).send("No file uploaded");
+        }
+
+        try {
+          console.log("Uploaded file:", req.file);
+          const resume = {
+            userId: new ObjectId(userId),
+            filename: req.file.filename,
+            uploadDate: new Date(),
+          };
+
+          const result = await resumesCollection.insertOne(resume);
+
+          res.send({
+            message: "Resume uploaded successfully",
+            resumeId: result.insertedId,
+          });
+        } catch (err) {
+          console.error("Error uploading resume:", err);
+          res.status(500).send("Internal Server Error");
+        }
       }
-
-      if (!req.file) {
-        return res.status(400).send("No file uploaded");
-      }
-
-      try {
-        console.log("Uploaded file:", req.file);
-        const resume = {
-          userId: new ObjectId(userId),
-          filename: req.file.filename,
-          uploadDate: new Date(),
-        };
-
-        const result = await resumesCollection.insertOne(resume);
-
-        res.send({
-          message: "Resume uploaded successfully",
-          resumeId: result.insertedId,
-        });
-      } catch (err) {
-        console.error("Error uploading resume:", err);
-        res.status(500).send("Internal Server Error");
-      }
-    });
+    );
 
     app.patch("/user/:id", async (req, res) => {
       const userId = req.params.id;
@@ -375,35 +435,37 @@ async function run() {
 
     app.patch("/recruiter/:id", async (req, res) => {
       const recruiterId = req.params.id;
-    
+
       // Validate recruiterId
       if (!ObjectId.isValid(recruiterId)) {
         return res.status(400).json({ message: "Invalid recruiter ID" });
       }
-    
+
       const updates = req.body;
-    
+
       // Validate that the request body is not empty
       if (!updates || Object.keys(updates).length === 0) {
-        return res.status(400).json({ message: "No fields provided for update" });
+        return res
+          .status(400)
+          .json({ message: "No fields provided for update" });
       }
-    
+
       try {
         const result = await userCollection.updateOne(
           { _id: new ObjectId(recruiterId) }, // Match by ID
           { $set: updates } // Update only the provided fields
         );
-    
+
         if (result.matchedCount === 0) {
           return res.status(404).json({ message: "Recruiter not found" });
         }
-    
+
         res.status(200).json({ message: "Recruiter updated successfully" });
       } catch (error) {
         console.error("Error updating recruiter:", error);
         res.status(500).json({ message: "Error updating recruiter" });
       }
-    });    
+    });
 
     app.patch("/user/:id/education", async (req, res) => {
       const userId = req.params.id;
@@ -626,6 +688,16 @@ async function run() {
             .status(404)
             .send({ message: "Job not found or view count not updated" });
         }
+
+        const updatedJob = await jobCollection.findOne({
+          _id: new ObjectId(jobId),
+        });
+
+        // Broadcast the updated view count to ALL connected clients
+        io.emit("jobViewIncremented", {
+          jobId: jobId,
+          newViewCount: updatedJob.view,
+        });
 
         res
           .status(200)
@@ -942,6 +1014,93 @@ async function run() {
       }
     });
 
+    // app.post("/jobs/apply", async (req, res) => {
+    //   const { userId, jobId } = req.body;
+
+    //   // Validate ObjectId format
+    //   if (!ObjectId.isValid(userId)) {
+    //     return res.status(400).send({ message: "Invalid user ID" });
+    //   }
+
+    //   if (!ObjectId.isValid(jobId)) {
+    //     return res.status(400).send({ message: "Invalid job ID" });
+    //   }
+
+    //   try {
+    //     // Check if an application already exists for this job
+    //     const application = await applicationCollection.findOne({ jobId });
+
+    //     if (application) {
+    //       const updatedApplication = await applicationCollection.updateOne(
+    //         { jobId },
+    //         {
+    //           $push: {
+    //             appliedUsers: {
+    //               userId,
+    //               appliedOn: new Date().toISOString(),
+    //             },
+    //           },
+    //         }
+    //       );
+
+    //       if (updatedApplication.modifiedCount === 1) {
+    //         // Retrieve the job poster's user id (assuming you store it in your job document)
+    //         const job = await jobCollection.findOne({ _id: new ObjectId(jobId) });
+    //         const jobPosterId = job?.postedBy; // adjust the field name accordingly
+
+    //         // Notify the job poster via socket if they are online
+    //         if (jobPosterId && onlineUsers[jobPosterId]) {
+    //           io.to(onlineUsers[jobPosterId]).emit("jobApplication", {
+    //             message: "A new application has been submitted for your job",
+    //             jobId,
+    //             applicantId: userId,
+    //           });
+    //         }
+
+    //         return res.status(200).send({ message: "Application submitted successfully" });
+    //       } else {
+    //         return res.status(500).send({ message: "Failed to apply for the job" });
+    //       }
+    //     } else {
+    //       // If no application exists, create a new one
+    //       const newApplication = {
+    //         jobId,
+    //         appliedUsers: [
+    //           {
+    //             userId,
+    //             appliedOn: new Date().toISOString(),
+    //           },
+    //         ],
+    //       };
+
+    //       const result = await applicationCollection.insertOne(newApplication);
+
+    //       if (result.acknowledged) {
+    //         // Retrieve the job poster's user id
+    //         const job = await jobCollection.findOne({ _id: new ObjectId(jobId) });
+    //         const jobPosterId = job?.postedBy; // adjust as needed
+
+    //         // Emit socket notification
+    //         if (jobPosterId && onlineUsers[jobPosterId]) {
+    //           io.to(onlineUsers[jobPosterId]).emit("jobApplication", {
+    //             message: "A new application has been submitted for your job",
+    //             jobId,
+    //             applicantId: userId,
+    //           });
+    //         }
+
+    //         return res.status(200).send({ message: "Application submitted successfully" });
+    //       } else {
+    //         console.error("Error in application insertion");
+    //         return res.status(500).send({ message: "Failed to apply for the job" });
+    //       }
+    //     }
+    //   } catch (error) {
+    //     console.error("Error applying for job:", error);
+    //     return res.status(500).send({ message: "Failed to apply for the job" });
+    //   }
+    // });
+
     app.get("/jobs/checkApplication", async (req, res) => {
       const { userId, jobId } = req.query; // Use req.query to get query params
 
@@ -1035,6 +1194,6 @@ app.get("/", (req, res) => {
   res.send("Job is listing..............");
 });
 
-app.listen(port, () => {
+server.listen(port, () => {
   console.log(`Job listing on port ${port}`);
 });
