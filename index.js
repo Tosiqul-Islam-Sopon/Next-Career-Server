@@ -846,6 +846,43 @@ async function run() {
       }
     });
 
+    app.get("/jobs/byIds", async (req, res) => {
+      try {
+        let { jobIds } = req.query; // Expecting jobIds as a query parameter
+
+        if (!jobIds) {
+          return res
+            .status(400)
+            .json({ message: "jobIds parameter is required" });
+        }
+
+        // Convert jobIds into an array if it's a string
+        if (typeof jobIds === "string") {
+          jobIds = jobIds.split(",");
+        }
+
+        // Ensure all jobIds are valid ObjectIds
+        const validJobIds = jobIds
+          .filter((id) => ObjectId.isValid(id))
+          .map((id) => new ObjectId(id));
+
+        if (validJobIds.length === 0) {
+          return res.status(400).json({ message: "No valid job IDs provided" });
+        }
+
+        // Find jobs with matching jobIds
+        const jobs = await jobCollection
+          .find({ _id: { $in: validJobIds } })
+          .toArray();
+
+        return res.json({ jobs });
+      } catch (error) {
+        return res
+          .status(500)
+          .json({ message: "Internal Server Error", error });
+      }
+    });
+
     app.get("/jobs/job/:jobId", async (req, res) => {
       const jobId = req.params.jobId;
       const job = await jobCollection.findOne({ _id: new ObjectId(jobId) });
@@ -861,7 +898,7 @@ async function run() {
 
       try {
         // Find all jobs where the user has applied
-        const appliedJobs = await jobCollection
+        const appliedJobs = await applicationCollection
           .find({
             appliedUsers: { $elemMatch: { userId } }, // Check if userId exists in any object within the array
           })
@@ -942,78 +979,6 @@ async function run() {
         res.status(500).json({ message: "Internal Server Error" });
       }
     });
-
-    // app.post("/jobs/apply", async (req, res) => {
-    //   const { userId, jobId } = req.body;
-
-    //   // Validate ObjectId format
-    //   if (!ObjectId.isValid(userId)) {
-    //     return res.status(400).send({ message: "Invalid user ID" });
-    //   }
-
-    //   if (!ObjectId.isValid(jobId)) {
-    //     return res.status(400).send({ message: "Invalid job ID" });
-    //   }
-
-    //   try {
-    //     // Check if an application already exists for this job
-    //     const application = await applicationCollection.findOne({ jobId });
-
-    //     if (application) {
-    //       // If application exists, update it by pushing new user into appliedUsers array
-    //       const updatedApplication = await applicationCollection.updateOne(
-    //         { jobId }, // Filter: find the correct job application
-    //         {
-    //           $push: {
-    //             appliedUsers: {
-    //               userId,
-    //               appliedOn: new Date().toISOString(),
-    //             },
-    //           },
-    //         }
-    //       );
-
-    //       // Check if the update was successful
-    //       if (updatedApplication.modifiedCount === 1) {
-    //         return res
-    //           .status(200)
-    //           .send({ message: "Application submitted successfully" });
-    //       } else {
-    //         return res
-    //           .status(500)
-    //           .send({ message: "Failed to apply for the job" });
-    //       }
-    //     } else {
-    //       // If no application exists, create a new one
-    //       const newApplication = {
-    //         jobId,
-    //         appliedUsers: [
-    //           {
-    //             userId,
-    //             appliedOn: new Date().toISOString(),
-    //           },
-    //         ],
-    //       };
-
-    //       const result = await applicationCollection.insertOne(newApplication);
-
-    //       // If the insert was successful
-    //       if (result.acknowledged) {
-    //         return res
-    //           .status(200)
-    //           .send({ message: "Application submitted successfully" });
-    //       } else {
-    //         console.error("error from else");
-    //         return res
-    //           .status(500)
-    //           .send({ message: "Failed to apply for the job" });
-    //       }
-    //     }
-    //   } catch (error) {
-    //     console.error("Error applying for job:", error);
-    //     return res.status(500).send({ message: "Failed to apply for the job" });
-    //   }
-    // });
 
     app.post("/jobs/apply", async (req, res) => {
       const { userId, jobId } = req.body;
@@ -1151,6 +1116,30 @@ async function run() {
         return res
           .status(500)
           .send({ message: "Failed to check application status" });
+      }
+    });
+
+    app.get("/jobs/totalApplicants/:jobId", async (req, res) => {
+      try {
+        const { jobId } = req.params;
+
+        if (!ObjectId.isValid(jobId)) {
+          return res.status(400).json({ message: "Invalid job ID" });
+        }
+
+        const applicationObj = await applicationCollection.findOne({ jobId });
+
+        if (!applicationObj) {
+          return res.status(404).json({ message: "Job not found" });
+        }
+
+        return res.json({
+          totalApplicants: applicationObj.appliedUsers.length,
+        });
+      } catch (error) {
+        return res
+          .status(500)
+          .json({ message: "Internal Server Error", error });
       }
     });
 
