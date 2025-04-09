@@ -981,7 +981,7 @@ async function run() {
     });
 
     app.post("/jobs/apply", async (req, res) => {
-      const { userId, jobId } = req.body;
+      const { userId, jobId, jobTitle, applicantName } = req.body;
 
       if (!ObjectId.isValid(userId)) {
         return res.status(400).send({ message: "Invalid user ID" });
@@ -1017,7 +1017,7 @@ async function run() {
             const notification = {
               userId: new ObjectId(jobPosterId), // The recipient of the notification
               type: "jobApplication",
-              message: "A new application has been submitted for your job",
+              message: `${applicantName} has been submitted a new application for your job ${jobTitle}`,
               data: { jobId, applicantId: userId },
               isRead: false,
               createdAt: new Date(),
@@ -1028,7 +1028,7 @@ async function run() {
 
             if (jobPosterId && onlineUsers[jobPosterId]) {
               io.to(onlineUsers[jobPosterId]).emit("jobApplication", {
-                message: "A new application has been submitted for your job",
+                message: `${applicantName} has been submitted a new application for your job ${jobTitle}`,
                 jobId,
                 applicantId: userId,
               });
@@ -1061,9 +1061,22 @@ async function run() {
             });
             const jobPosterId = job?.postedBy; // Use a consistent field name
 
+            // Build the notification object
+            const notification = {
+              userId: new ObjectId(jobPosterId), // The recipient of the notification
+              type: "jobApplication",
+              message: `${applicantName} has been submitted a new application for your job ${jobTitle}`,
+              data: { jobId, applicantId: userId },
+              isRead: false,
+              createdAt: new Date(),
+            };
+
+            // Store the notification in the database
+            await notificationCollection.insertOne(notification);
+
             if (jobPosterId && onlineUsers[jobPosterId]) {
               io.to(onlineUsers[jobPosterId]).emit("jobApplication", {
-                message: "A new application has been submitted for your job",
+                message: `${applicantName} has been submitted a new application for your job ${jobTitle}`,
                 jobId,
                 applicantId: userId,
               });
@@ -1185,6 +1198,44 @@ async function run() {
       } catch (error) {
         console.error("Error fetching applicants:", error);
         return res.status(500).send({ message: "Failed to fetch applicants" });
+      }
+    });
+
+    app.get("/notifications/:userId", async (req, res) => {
+      try {
+        const { userId } = req.params;
+
+        // Fetch unread notifications from the database
+        const notifications = await notificationCollection
+          .find({ userId: new ObjectId(userId) })
+          .sort({ createdAt: -1 }) // Sort by newest first
+          .toArray();
+
+        res.status(200).json({ success: true, notifications });
+      } catch (error) {
+        console.error("Error fetching notifications:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error" });
+      }
+    });
+
+    app.get("/notifications/unread/:userId", async (req, res) => {
+      try {
+        const { userId } = req.params;
+
+        // Fetch unread notifications from the database
+        const notifications = await notificationCollection
+          .find({ userId: new ObjectId(userId), isRead: false })
+          .sort({ createdAt: -1 }) // Sort by newest first
+          .toArray();
+
+        res.status(200).json({ success: true, notifications });
+      } catch (error) {
+        console.error("Error fetching notifications:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error" });
       }
     });
 
