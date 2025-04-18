@@ -1208,11 +1208,19 @@ async function run() {
         const { jobId, userId } = req.params;
         const { stage } = req.body;
 
-        // Update job: add stage to completedStages if not already there
-        await jobCollection.updateOne(
-          { _id: new ObjectId(jobId) },
-          { $addToSet: { completedStages: stage } }
-        );
+        // 1. Prepare job update query
+        const jobUpdate = {
+          $addToSet: { completedStages: stage },
+        };
+
+        const isHired = stage.toLowerCase() === "hire";
+
+        if (isHired) {
+          jobUpdate.$inc = { recruited: 1 };
+        }
+
+        // 2. Update job document
+        await jobCollection.updateOne({ _id: new ObjectId(jobId) }, jobUpdate);
 
         // Update application: add stage to progressStages for the given user
         await applicationCollection.updateOne(
@@ -1226,8 +1234,6 @@ async function run() {
             arrayFilters: [{ "user.userId": userId }],
           }
         );
-
-        const isHired = stage.toLowerCase() === "hire"; // case-insensitive check
 
         const message = isHired
           ? "🎉 Congratulations! You have been hired for the position."
