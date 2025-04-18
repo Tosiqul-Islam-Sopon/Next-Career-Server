@@ -1201,6 +1201,63 @@ async function run() {
       }
     });
 
+    // PATCH /jobs/advanceStage/:jobId/:userId
+
+    app.patch("/jobs/advanceStage/:jobId/:userId", async (req, res) => {
+      try {
+        const { jobId, userId } = req.params;
+        const { stage } = req.body;
+
+        // Update job: add stage to completedStages if not already there
+        await jobCollection.updateOne(
+          { _id: new ObjectId(jobId) },
+          { $addToSet: { completedStages: stage } }
+        );
+
+        // Update application: add stage to progressStages for the given user
+        await applicationCollection.updateOne(
+          { jobId },
+          {
+            $addToSet: {
+              "appliedUsers.$[user].progressStages": stage,
+            },
+          },
+          {
+            arrayFilters: [{ "user.userId": userId }],
+          }
+        );
+
+        const isHired = stage.toLowerCase() === "hire"; // case-insensitive check
+
+        const message = isHired
+          ? "🎉 Congratulations! You have been hired for the position."
+          : `🎯 You've been selected for the ${stage} stage`;
+
+        const notification = {
+          userId: new ObjectId(userId), // 👈 the applicant receiving the notification
+          type: "stageProgress",
+          message,
+          data: { jobId, stage },
+          isRead: false,
+          createdAt: new Date(),
+        };
+
+        await notificationCollection.insertOne(notification);
+
+        if (userId && onlineUsers[userId]) {
+          io.to(onlineUsers[userId]).emit("stageProgress", {
+            message,
+            jobId,
+            stage,
+          });
+        }
+
+        res.status(200).json({ message: "Stage updated successfully" });
+      } catch (err) {
+        res.status(500).json({ message: "Error updating stage", error: err });
+      }
+    });
+
     app.get("/notifications/:userId", async (req, res) => {
       try {
         const { userId } = req.params;
@@ -1240,7 +1297,7 @@ async function run() {
     });
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
+    // await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
