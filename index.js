@@ -651,15 +651,23 @@ async function run() {
     app.get("/user/userRole/:email", async (req, res) => {
       const email = req.params.email;
       try {
+        const adminEmails = process.env.ADMIN_EMAILS?.split(",") || [];
+
+        // ✅ First check if this email is an admin
+        if (adminEmails.includes(email)) {
+          return res.send("admin");
+        }
+
+        // ✅ Otherwise check in DB for user role
         const user = await userCollection.findOne({ email });
         if (user && user.role) {
-          res.send(user.role);
+          return res.send(user.role); // e.g., "user", "recruiter"
         } else {
-          res.status(404).send({ message: "User role not found" });
+          return res.status(404).send({ message: "User role not found" });
         }
       } catch (error) {
         console.error("Error fetching user role:", error);
-        res.status(500).send({ message: "Internal Server Error" });
+        return res.status(500).send({ message: "Internal Server Error" });
       }
     });
 
