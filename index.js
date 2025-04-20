@@ -1310,6 +1310,83 @@ async function run() {
       }
     });
 
+    app.get("/admin/topRecruitingCompanies", async (req, res) => {
+      try {
+        const topCompanies = await jobCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$companyInfo.companyName", // Group by company name
+                totalRecruited: { $sum: "$recruited" },
+                companyLogo: { $first: "$companyInfo.companyLogo" }, // Optional: company logo if available
+              },
+            },
+            {
+              $sort: { totalRecruited: -1 },
+            },
+            {
+              $limit: 5,
+            },
+          ])
+          .toArray();
+
+        res.status(200).json(topCompanies);
+      } catch (err) {
+        console.error("Failed to fetch top recruiting companies:", err);
+        res.status(500).json({ message: "Internal Server Error" });
+      }
+    });
+
+    app.get("/admin/topRecruitingSectors", async (req, res) => {
+      try {
+        const topSectors = await jobCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$jobCategory", // Group by job category
+                totalRecruited: { $sum: "$recruited" },
+              },
+            },
+            {
+              $sort: { totalRecruited: -1 }, // Sort descending
+            },
+            {
+              $limit: 5, // Top 5
+            },
+          ])
+          .toArray();
+
+        res.status(200).json(topSectors);
+      } catch (err) {
+        console.error("Failed to fetch top recruiting sectors:", err);
+        res.status(500).json({ message: "Internal Server Error" });
+      }
+    });
+
+    // GET /admin/categoryWiseRecruited
+    app.get("/admin/categoryWiseRecruited", async (req, res) => {
+      try {
+        const categoryStats = await jobCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$jobCategory", // Group by job category
+                totalRecruited: { $sum: "$recruited" },
+              },
+            },
+            {
+              $sort: { totalRecruited: -1 }, // Optional: sorted by top recruiting
+            },
+          ])
+          .toArray();
+
+        res.status(200).json(categoryStats);
+      } catch (err) {
+        console.error("Failed to fetch category-wise recruited data:", err);
+        res.status(500).json({ message: "Internal Server Error" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
     console.log(
