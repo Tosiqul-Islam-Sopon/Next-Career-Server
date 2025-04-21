@@ -1387,6 +1387,42 @@ async function run() {
       }
     });
 
+    app.get("/admin/dashboardStats", async (req, res) => {
+      try {
+        // Total Jobs
+        const totalJobs = await jobCollection.countDocuments();
+    
+        // Active Recruiters
+        const activeRecruiters = await userCollection.countDocuments({ role: "recruiter" });
+    
+        // Job Seekers
+        const jobSeekers = await userCollection.countDocuments({ role: "user" });
+    
+        // Placements (Number of recruits)
+        const totalPlacements = await jobCollection.aggregate([
+          {
+            $match: { recruited: { $gt: 0 } } // Ensure there's a recruited count
+          },
+          {
+            $group: { _id: null, totalRecruited: { $sum: "$recruited" } }
+          }
+        ]).toArray();
+        
+        const placements = totalPlacements.length ? totalPlacements[0].totalRecruited : 0;
+    
+        // Send the response
+        res.status(200).json({
+          totalJobs,
+          activeRecruiters,
+          jobSeekers,
+          placements
+        });
+      } catch (err) {
+        console.error("Error fetching stats:", err);
+        res.status(500).json({ message: "Internal Server Error" });
+      }
+    });    
+
     // Send a ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
     console.log(
