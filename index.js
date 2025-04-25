@@ -18,6 +18,7 @@ const server = http.createServer(app);
 
 // Set up Socket.IO server with CORS enabled
 const { Server } = require("socket.io");
+const { log } = require("console");
 const io = new Server(server, {
   cors: {
     origin: "*", // Adjust for your environment
@@ -1101,9 +1102,8 @@ async function run() {
     });
 
     app.get("/jobs/checkApplication", async (req, res) => {
-      const { userId, jobId } = req.query; // Use req.query to get query params
+      const { userId, jobId } = req.query;
 
-      // Validate ObjectId format
       if (!ObjectId.isValid(userId)) {
         return res.status(400).send({ message: "Invalid user ID" });
       }
@@ -1113,21 +1113,29 @@ async function run() {
       }
 
       try {
-        // Check if an application already exists for the specific job and user
+        // Step 1: Check if application exists
         const application = await applicationCollection.findOne({
-          jobId,
-          "appliedUsers.userId": userId, // Query the specific userId inside the appliedUsers array
+          jobId: jobId,
+          "appliedUsers.userId": userId,
         });
 
-        if (application) {
-          // User has already applied for this job
-          return res.send(true);
-        } else {
-          // User has not applied for this job
-          return res.send(false);
+        if (!application) {
+          return res.send({ hasApplied: false });
         }
+
+        // Step 2: Check for schedule
+        const schedule = await scheduleCollection.findOne({
+          jobId: new ObjectId(jobId),
+          candidateId: new ObjectId(userId),
+        });
+
+        return res.send({
+          hasApplied: true,
+          hasSchedule: !!schedule,
+          schedule: schedule || null,
+        });
       } catch (error) {
-        console.error("Error checking application status:", error);
+        console.error("Error checking application or schedule:", error);
         return res
           .status(500)
           .send({ message: "Failed to check application status" });
