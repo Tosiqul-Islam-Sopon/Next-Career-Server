@@ -136,6 +136,7 @@ async function run() {
     const jobCollection = database.collection("jobs");
     const applicationCollection = database.collection("applications");
     const notificationCollection = database.collection("notifications");
+    const scheduleCollection = database.collection("schedules");
 
     // File upload route
     app.post(
@@ -1384,37 +1385,90 @@ async function run() {
       try {
         // Total Jobs
         const totalJobs = await jobCollection.countDocuments();
-    
+
         // Active Recruiters
-        const activeRecruiters = await userCollection.countDocuments({ role: "recruiter" });
-    
+        const activeRecruiters = await userCollection.countDocuments({
+          role: "recruiter",
+        });
+
         // Job Seekers
-        const jobSeekers = await userCollection.countDocuments({ role: "user" });
-    
+        const jobSeekers = await userCollection.countDocuments({
+          role: "user",
+        });
+
         // Placements (Number of recruits)
-        const totalPlacements = await jobCollection.aggregate([
-          {
-            $match: { recruited: { $gt: 0 } } // Ensure there's a recruited count
-          },
-          {
-            $group: { _id: null, totalRecruited: { $sum: "$recruited" } }
-          }
-        ]).toArray();
-        
-        const placements = totalPlacements.length ? totalPlacements[0].totalRecruited : 0;
-    
+        const totalPlacements = await jobCollection
+          .aggregate([
+            {
+              $match: { recruited: { $gt: 0 } }, // Ensure there's a recruited count
+            },
+            {
+              $group: { _id: null, totalRecruited: { $sum: "$recruited" } },
+            },
+          ])
+          .toArray();
+
+        const placements = totalPlacements.length
+          ? totalPlacements[0].totalRecruited
+          : 0;
+
         // Send the response
         res.status(200).json({
           totalJobs,
           activeRecruiters,
           jobSeekers,
-          placements
+          placements,
         });
       } catch (err) {
         console.error("Error fetching stats:", err);
         res.status(500).json({ message: "Internal Server Error" });
       }
-    });    
+    });
+
+    app.post("/job/schedule", async (req, res) => {
+      try {
+        const {
+          jobId,
+          candidateId,
+          stageName,
+          scheduledDate,
+          startTime,
+          endTime,
+          note,
+        } = req.body;
+
+        // 🔒 Validate required fields
+        if (
+          !jobId ||
+          !candidateId ||
+          !stageName ||
+          !scheduledDate ||
+          !startTime ||
+          !endTime
+        ) {
+          return res.status(400).json({ message: "Missing required fields" });
+        }
+
+        const scheduleDoc = {
+          jobId: new ObjectId(jobId),
+          candidateId: new ObjectId(candidateId),
+          stageName,
+          scheduledDate,
+          startTime,
+          endTime,
+          note: note || "",
+          status: "scheduled",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+
+        const result = await scheduleCollection.insertOne(scheduleDoc);
+        res.status(200).json(result.ops?.[0] || scheduleDoc);
+      } catch (err) {
+        console.error("❌ Insert error", err);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
 
     // Send a ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
