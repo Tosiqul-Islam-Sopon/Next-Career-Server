@@ -1437,6 +1437,7 @@ async function run() {
       try {
         const {
           jobId,
+          recruiterId,
           candidateId,
           stageName,
           scheduledDate,
@@ -1445,9 +1446,9 @@ async function run() {
           note,
         } = req.body;
 
-        // 🔒 Validate required fields
         if (
           !jobId ||
+          !recruiterId ||
           !candidateId ||
           !stageName ||
           !scheduledDate ||
@@ -1457,9 +1458,21 @@ async function run() {
           return res.status(400).json({ message: "Missing required fields" });
         }
 
+        const jobObjectId = new ObjectId(jobId);
+        const candidateObjectId = new ObjectId(candidateId);
+        const recruiterObjectId = new ObjectId(recruiterId);
+
+        // 🧹 Step 1: Remove existing schedule (if any) for the same job & candidate
+        await scheduleCollection.deleteOne({
+          jobId: jobObjectId,
+          candidateId: candidateObjectId,
+        });
+
+        // 🆕 Step 2: Insert new schedule
         const scheduleDoc = {
-          jobId: new ObjectId(jobId),
-          candidateId: new ObjectId(candidateId),
+          jobId: jobObjectId,
+          recruiterId: recruiterObjectId,
+          candidateId: candidateObjectId,
           stageName,
           scheduledDate,
           startTime,
@@ -1471,9 +1484,62 @@ async function run() {
         };
 
         const result = await scheduleCollection.insertOne(scheduleDoc);
-        res.status(200).json(result.ops?.[0] || scheduleDoc);
+
+        res.status(200).json(scheduleDoc);
       } catch (err) {
-        console.error("❌ Insert error", err);
+        console.error("❌ Schedule insert error", err);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    app.get("/job/schedules/candidate/:candidateId", async (req, res) => {
+      try {
+        const { candidateId } = req.params;
+
+        if (!candidateId) {
+          return res.status(400).json({ message: "Missing candidateId" });
+        }
+
+        const today = new Date();
+        const todayDateStr = today.toISOString().split("T")[0]; // 'YYYY-MM-DD'
+
+        const schedules = await scheduleCollection
+          .find({
+            candidateId: new ObjectId(candidateId),
+            scheduledDate: { $gte: todayDateStr },
+          })
+          .sort({ scheduledDate: 1, startTime: 1 })
+          .toArray();
+
+        res.status(200).json(schedules);
+      } catch (err) {
+        console.error("❌ Fetch candidate schedules error", err);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    app.get("/job/schedules/recruiter/:recruiterId", async (req, res) => {
+      try {
+        const { recruiterId } = req.params;
+
+        if (!recruiterId) {
+          return res.status(400).json({ message: "Missing recruiterId" });
+        }
+
+        const today = new Date();
+        const todayDateStr = today.toISOString().split("T")[0]; // 'YYYY-MM-DD'
+
+        const schedules = await scheduleCollection
+          .find({
+            recruiterId: new ObjectId(recruiterId),
+            scheduledDate: { $gte: todayDateStr },
+          })
+          .sort({ scheduledDate: 1, startTime: 1 })
+          .toArray();
+
+        res.status(200).json(schedules);
+      } catch (err) {
+        console.error("❌ Fetch recruiter schedules error", err);
         res.status(500).json({ message: "Server error" });
       }
     });
