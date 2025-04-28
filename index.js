@@ -12,13 +12,15 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 app.use(express.json());
-app.use(cors({
-  origin: [
-    "http://localhost:5173",
-    "https://next-career-9a82c.web.app",
-    "https://next-career-9a82c.firebaseapp.com",
-  ]
-}));
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "https://next-career-9a82c.web.app",
+      "https://next-career-9a82c.firebaseapp.com",
+    ],
+  })
+);
 
 const server = http.createServer(app);
 
@@ -27,9 +29,16 @@ const { Server } = require("socket.io");
 const { log } = require("console");
 const io = new Server(server, {
   cors: {
-    origin: "*", // Adjust for your environment
+    origin: [
+      "http://localhost:5173",
+      "https://next-career-9a82c.web.app",
+      "https://next-career-9a82c.firebaseapp.com",
+    ],
     methods: ["GET", "POST"],
+    credentials: true,
   },
+  pingTimeout: 20000, // Disconnect clients if no heartbeat in 20 seconds
+  pingInterval: 25000,
 });
 
 // Object to store online users mapping (userId -> socketId)
@@ -677,6 +686,30 @@ async function run() {
       const result = await jobCollection.insertOne(job);
       res.send(result);
     });
+
+    app.patch("/jobs/job/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const updateData = req.body;
+    
+        const filter = { _id: new ObjectId(id) };
+        const updateDoc = {
+          $set: updateData,
+        };
+    
+        const result = await jobCollection.updateOne(filter, updateDoc);
+    
+        if (result.modifiedCount > 0) {
+          res.send({ success: true, message: "Job updated successfully." });
+        } else {
+          res.send({ success: false, message: "No changes made to the job." });
+        }
+      } catch (error) {
+        console.error("Error updating job:", error);
+        res.status(500).send({ success: false, message: "Failed to update job." });
+      }
+    });
+    
 
     // Increment view count for a specific job
     app.patch("/jobs/incrementView/:id", async (req, res) => {
