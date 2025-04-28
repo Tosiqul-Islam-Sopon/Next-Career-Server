@@ -691,14 +691,14 @@ async function run() {
       try {
         const { id } = req.params;
         const updateData = req.body;
-    
+
         const filter = { _id: new ObjectId(id) };
         const updateDoc = {
           $set: updateData,
         };
-    
+
         const result = await jobCollection.updateOne(filter, updateDoc);
-    
+
         if (result.modifiedCount > 0) {
           res.send({ success: true, message: "Job updated successfully." });
         } else {
@@ -706,10 +706,11 @@ async function run() {
         }
       } catch (error) {
         console.error("Error updating job:", error);
-        res.status(500).send({ success: false, message: "Failed to update job." });
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to update job." });
       }
     });
-    
 
     // Increment view count for a specific job
     app.patch("/jobs/incrementView/:id", async (req, res) => {
@@ -759,13 +760,16 @@ async function run() {
           category,
           sortCriteria,
           jobType,
-          jobLocation,
           page = 1,
           limit = 15,
         } = req.query;
 
         const filter = {};
 
+        // ⏳ 1. Only fetch jobs whose deadline is NOT over
+        filter.deadline = { $gte: new Date() };
+
+        // 🔎 2. Other filters
         if (searchTitle) {
           filter.jobTitle = { $regex: new RegExp(searchTitle, "i") };
         }
@@ -779,12 +783,13 @@ async function run() {
         }
         if (jobType) {
           if (jobType === "Full Time" || jobType === "Part Time") {
-            query.jobType = jobType;
+            filter.jobType = jobType;
           } else {
-            query.jobLocation = jobType;
+            filter.jobLocation = jobType;
           }
         }
 
+        // 📦 3. Query MongoDB
         let jobs = await jobCollection
           .find(filter)
           .sort(sortCriteria ? { [sortCriteria]: -1 } : {})
@@ -794,6 +799,7 @@ async function run() {
 
         const totalJobs = await jobCollection.countDocuments(filter);
 
+        // 🎯 4. Send Response
         res.status(200).json({
           jobs,
           totalPages: Math.ceil(totalJobs / limit),
@@ -810,43 +816,49 @@ async function run() {
         const jobs = await jobCollection
           .aggregate([
             {
-              $group: {
-                _id: "$jobCategory",
-                totalVacancy: { $sum: { $toInt: "$vacancy" } }, // Convert vacancy to integer and sum
+              $match: {
+                deadline: { $gte: new Date() }, // ✅ Only include jobs with future or today's deadline
               },
             },
             {
-              $sort: { totalVacancy: -1 }, // Sort by the number of vacancies in descending order
+              $group: {
+                _id: "$jobCategory",
+                totalVacancy: { $sum: { $toInt: "$vacancy" } },
+              },
+            },
+            {
+              $sort: { totalVacancy: -1 }, // Descending order by vacancy
             },
           ])
           .toArray();
-
+    
         res.status(200).json(jobs);
       } catch (error) {
         console.error("Error fetching jobs:", error);
         res.status(500).json({ message: "Error fetching jobs", error });
       }
-    });
+    });    
 
     app.get("/jobs/featuredJobs", async (req, res) => {
-      const page = parseInt(req.query.page) || 1; // Default to first page
-      const limit = parseInt(req.query.limit) || 10; // Default to 10 jobs per page
-      const skip = (page - 1) * limit; // Calculate the number of documents to skip
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 10;
+      const skip = (page - 1) * limit;
 
       try {
-        // Fetch the total number of jobs
-        const totalJobs = await jobCollection.countDocuments();
-        const totalPages = Math.ceil(totalJobs / limit); // Calculate total pages
+        const filter = {
+          deadline: { $gte: new Date() }, // 🚀 Only fetch jobs with active deadline
+        };
 
-        // Fetch the jobs for the current page
+        const totalJobs = await jobCollection.countDocuments(filter);
+        const totalPages = Math.ceil(totalJobs / limit);
+
         const topJobs = await jobCollection
-          .find({})
-          .sort({ view: -1 })
+          .find(filter)
+          .sort({ view: -1 }) // Highest viewed jobs
           .skip(skip)
           .limit(limit)
           .toArray();
 
-        // Send jobs along with pagination information
         res.send({
           jobs: topJobs,
           totalPages,
@@ -859,24 +871,25 @@ async function run() {
     });
 
     app.get("/jobs/newestJobs", async (req, res) => {
-      const page = parseInt(req.query.page) || 1; // Default to first page
-      const limit = parseInt(req.query.limit) || 10; // Default to 10 jobs per page
-      const skip = (page - 1) * limit; // Calculate the number of documents to skip
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 10;
+      const skip = (page - 1) * limit;
 
       try {
-        // Fetch the total number of jobs
-        const totalJobs = await jobCollection.countDocuments();
-        const totalPages = Math.ceil(totalJobs / limit); // Calculate total pages
+        const filter = {
+          deadline: { $gte: new Date() }, // 🚀 Only fetch jobs with active deadline
+        };
 
-        // Fetch the jobs for the current page sorted by upload date (newest first)
+        const totalJobs = await jobCollection.countDocuments(filter);
+        const totalPages = Math.ceil(totalJobs / limit);
+
         const newestJobs = await jobCollection
-          .find({})
-          .sort({ date: -1 }) // Sort by 'date' in descending order
+          .find(filter)
+          .sort({ date: -1 }) // Newest first
           .skip(skip)
           .limit(limit)
           .toArray();
 
-        // Send jobs along with pagination information
         res.send({
           jobs: newestJobs,
           totalPages,
