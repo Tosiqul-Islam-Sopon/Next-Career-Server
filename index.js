@@ -146,7 +146,7 @@ async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
     // await client.connect();
-    const database = client.db("Job-Listing");
+    const database = client.db("next-career");
     // const database = client.db("job-listing");
     const userCollection = database.collection("users");
     const jobCollection = database.collection("jobs");
