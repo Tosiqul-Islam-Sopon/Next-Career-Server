@@ -682,9 +682,26 @@ async function run() {
     });
 
     app.post("/jobs", async (req, res) => {
-      const job = req.body;
-      const result = await jobCollection.insertOne(job);
-      res.send(result);
+      try {
+        const job = req.body;
+
+        // Ensure deadline is converted to a Date object if it exists
+        if (job.deadline) {
+          job.deadline = new Date(job.deadline);
+        }
+
+        // Insert the job data into the database
+        const result = await jobCollection.insertOne(job);
+
+        // Send back the result of the insert operation
+        res.status(200).send(result);
+      } catch (error) {
+        // If any error occurs, send a 500 error with the error message
+        console.error("Error inserting job data:", error);
+        res
+          .status(500)
+          .send({ message: "Error inserting job data", error: error.message });
+      }
     });
 
     app.patch("/jobs/job/:id", async (req, res) => {
@@ -752,19 +769,19 @@ async function run() {
       }
     });
 
-    // app.get("/allJobs", async (req, res) => {
-    //   const jobs = await jobCollection.find({}).toArray();
+    app.get("/updateDeadlines", async (req, res) => {
+      const jobs = await jobCollection.find({}).toArray();
 
-    //   for (const job of jobs) {
-    //     if (typeof job.deadline === "string") {
-    //       await jobCollection.updateOne(
-    //         { _id: job._id },
-    //         { $set: { deadline: new Date(job.deadline) } }
-    //       );
-    //     }
-    //   }
-    //   res.send('jobs fetched');
-    // });
+      for (const job of jobs) {
+        if (typeof job.deadline === "string") {
+          await jobCollection.updateOne(
+            { _id: job._id },
+            { $set: { deadline: new Date(job.deadline) } }
+          );
+        }
+      }
+      res.send('jobs fetched');
+    });
 
     app.get("/jobs", async (req, res) => {
       try {
