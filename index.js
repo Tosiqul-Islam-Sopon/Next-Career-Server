@@ -752,6 +752,20 @@ async function run() {
       }
     });
 
+    // app.get("/allJobs", async (req, res) => {
+    //   const jobs = await jobCollection.find({}).toArray();
+
+    //   for (const job of jobs) {
+    //     if (typeof job.deadline === "string") {
+    //       await jobCollection.updateOne(
+    //         { _id: job._id },
+    //         { $set: { deadline: new Date(job.deadline) } }
+    //       );
+    //     }
+    //   }
+    //   res.send('jobs fetched');
+    // });
+
     app.get("/jobs", async (req, res) => {
       try {
         const {
@@ -831,13 +845,13 @@ async function run() {
             },
           ])
           .toArray();
-    
+
         res.status(200).json(jobs);
       } catch (error) {
         console.error("Error fetching jobs:", error);
         res.status(500).json({ message: "Error fetching jobs", error });
       }
-    });    
+    });
 
     app.get("/jobs/featuredJobs", async (req, res) => {
       const page = parseInt(req.query.page) || 1;
