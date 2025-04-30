@@ -254,8 +254,16 @@ async function run() {
     // Fetch user profile image
     app.get("/profileImage/:userId", async (req, res) => {
       try {
+        const userId = req.params.userId;
+
+        if (!userId) {
+          return res.status(400).json({ message: "User ID is required" });
+        }
+
+        // Get the most recent profile image for the user
         const files = await profileImagesBucket
-          .find({ "metadata.userId": req.params.userId })
+          .find({ "metadata.userId": userId })
+          .sort({ uploadDate: -1 })
           .toArray();
 
         if (!files || files.length === 0) {
@@ -263,10 +271,13 @@ async function run() {
         }
 
         const file = files[0];
-        res.set("Content-Type", file.contentType); // Set content type dynamically
-        const readStream = profileImagesBucket.openDownloadStreamByName(
-          file.filename
-        );
+
+        // Set content type and caching
+        res.set("Content-Type", file.contentType);
+        res.set("Cache-Control", "public, max-age=86400");
+
+        // Stream the image using the safe _id reference
+        const readStream = profileImagesBucket.openDownloadStream(file._id);
         readStream.pipe(res);
       } catch (error) {
         console.error("Error retrieving profile image:", error);
@@ -277,35 +288,27 @@ async function run() {
     // Fetch company logo
     app.get("/companyLogo/:userId", async (req, res) => {
       try {
-        // Validate companyId
         const userId = req.params.userId;
 
         if (!userId) {
-          return res.status(400).json({ message: "Company ID is required" });
+          return res.status(400).json({ message: "User ID is required" });
         }
 
-        // If companyId is stored as ObjectId, validate and convert it
-        // Uncomment this block if ObjectId is used:
-        // if (!ObjectId.isValid(companyId)) {
-        //   return res.status(400).json({ message: "Invalid Company ID format" });
-        // }
-
         const files = await companyLogosBucket
-          .find({ "metadata.userId": userId }) // Use new ObjectId(companyId) if companyId is stored as ObjectId
+          .find({ "metadata.userId": userId })
+          .sort({ uploadDate: -1 }) // newer first
           .toArray();
 
         if (!files || files.length === 0) {
           return res.status(404).json({ message: "Company logo not found" });
         }
 
-        // Serve the most recent file (if multiple exist)
-        const file = files.sort((a, b) => b.uploadDate - a.uploadDate)[0];
+        const file = files[0]; // most recent logo
 
-        // Set Content-Type header and stream the file
         res.set("Content-Type", file.contentType);
-        const readStream = companyLogosBucket.openDownloadStreamByName(
-          file.filename
-        );
+        res.set("Cache-Control", "public, max-age=86400");
+
+        const readStream = companyLogosBucket.openDownloadStream(file._id);
         readStream.pipe(res);
       } catch (error) {
         console.error("Error retrieving company logo:", error);
@@ -780,7 +783,7 @@ async function run() {
           );
         }
       }
-      res.send('jobs fetched');
+      res.send("jobs fetched");
     });
 
     app.get("/jobs", async (req, res) => {
