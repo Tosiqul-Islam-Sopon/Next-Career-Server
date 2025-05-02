@@ -1297,6 +1297,39 @@ async function run() {
       }
     });
 
+    // GET /applications/progressStages/:jobId/:userId
+    app.get("/applications/progressStages/:jobId/:userId", async (req, res) => {
+      try {
+        const { jobId, userId } = req.params;
+
+        const application = await applicationCollection.findOne({
+          jobId: jobId,
+          "appliedUsers.userId": userId,
+        });
+
+        if (!application) {
+          return res.status(404).send({ message: "Application not found" });
+        }
+
+        const appliedUser = application.appliedUsers.find(
+          (user) => user.userId === userId
+        );
+
+        if (!appliedUser) {
+          return res
+            .status(404)
+            .send({ message: "User not found in application" });
+        }
+
+        return res
+          .status(200)
+          .send({ progressStages: appliedUser.progressStages });
+      } catch (err) {
+        console.error("Error fetching progressStages:", err);
+        return res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
     // PATCH /jobs/advanceStage/:jobId/:userId
 
     app.patch("/jobs/advanceStage/:jobId/:userId", async (req, res) => {
@@ -1397,6 +1430,66 @@ async function run() {
           .json({ success: false, message: "Internal server error" });
       }
     });
+
+    app.patch("/notifications/mark-all-as-read/:userId", async (req, res) => {
+      try {
+        const { userId } = req.params;
+
+        const result = await notificationCollection.updateMany(
+          { userId: new ObjectId(userId), isRead: false },
+          { $set: { isRead: true } }
+        );
+
+        res.status(200).json({
+          success: true,
+          message: `${result.modifiedCount} notifications marked as read.`,
+        });
+      } catch (error) {
+        console.error("Error marking notifications as read:", error);
+        res.status(500).json({
+          success: false,
+          message: "Failed to mark notifications as read",
+        });
+      }
+    });
+
+    app.patch(
+      "/notifications/mark-as-read/:notificationId",
+      async (req, res) => {
+        try {
+          const { notificationId } = req.params;
+
+          if (!ObjectId.isValid(notificationId)) {
+            return res
+              .status(400)
+              .json({ success: false, message: "Invalid ID" });
+          }
+
+          const result = await notificationCollection.updateOne(
+            { _id: new ObjectId(notificationId) },
+            { $set: { isRead: true } }
+          );
+
+          if (result.modifiedCount === 0) {
+            return res.status(404).json({
+              success: false,
+              message: "Notification not found or already marked as read",
+            });
+          }
+
+          res.status(200).json({
+            success: true,
+            message: "Notification marked as read",
+          });
+        } catch (error) {
+          console.error("Error updating notification:", error);
+          res.status(500).json({
+            success: false,
+            message: "Internal server error",
+          });
+        }
+      }
+    );
 
     app.get("/admin/topRecruitingCompanies", async (req, res) => {
       try {
