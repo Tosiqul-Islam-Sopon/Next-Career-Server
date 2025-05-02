@@ -1254,48 +1254,50 @@ async function run() {
 
     app.get("/jobs/applicants/:jobId", async (req, res) => {
       const { jobId } = req.params;
-
+    
       if (!ObjectId.isValid(jobId)) {
         return res.status(400).send({ message: "Invalid job ID" });
       }
-
+    
       try {
-        // Fetch job application and applicants from the 'applications' collection
+        // Fetch job application and applicants
         const application = await applicationCollection.findOne({ jobId });
-
+    
         if (!application) {
           return res
             .status(404)
             .send({ message: "No applications found for this job" });
         }
-
-        // Extract user IDs from the appliedUsers array
+    
         const userIds = application.appliedUsers.map(
           (applicant) => new ObjectId(applicant.userId)
         );
-
-        // Fetch full user details from the 'users' collection
+    
         const users = await userCollection
           .find({ _id: { $in: userIds } })
           .toArray();
-
-        // Combine user details with the corresponding application details
+    
+        // Merge full user info with application metadata
         const detailedApplicants = application.appliedUsers.map((applicant) => {
           const user = users.find(
             (u) => u._id.toString() === applicant.userId.toString()
           );
+    
           return {
-            ...user, // Spread user details
-            appliedOn: applicant.appliedOn, // Add the appliedOn field from the application
+            ...user,
+            appliedOn: applicant.appliedOn,
+            progressStages: applicant.progressStages || [],
+            rejected: applicant.rejected || false,
           };
         });
-
+    
         return res.status(200).send(detailedApplicants);
       } catch (error) {
         console.error("Error fetching applicants:", error);
         return res.status(500).send({ message: "Failed to fetch applicants" });
       }
     });
+    
 
     // GET /applications/progressStages/:jobId/:userId
     app.get("/applications/progressStages/:jobId/:userId", async (req, res) => {
@@ -1323,12 +1325,70 @@ async function run() {
 
         return res
           .status(200)
-          .send({ progressStages: appliedUser.progressStages });
+          .send({ progressStages: appliedUser.progressStages, rejected: appliedUser.rejected || false });
       } catch (err) {
         console.error("Error fetching progressStages:", err);
         return res.status(500).send({ message: "Internal server error" });
       }
     });
+
+    app.patch("/jobs/rejectCandidate/:jobId/:userId", async (req, res) => {
+      try {
+        const { jobId, userId } = req.params;
+        const jobObjectId = new ObjectId(jobId);
+        const candidateObjectId = new ObjectId(userId);
+    
+        // 1. Update `reject: true` in the correct appliedUsers entry
+        const result = await applicationCollection.updateOne(
+          { jobId },
+          {
+            $set: {
+              "appliedUsers.$[user].rejected": true,
+            },
+          },
+          {
+            arrayFilters: [{ "user.userId": userId }],
+          }
+        );
+    
+        if (result.modifiedCount === 0) {
+          return res.status(404).json({ message: "Candidate not found or already rejected" });
+        }
+
+        await scheduleCollection.deleteOne({
+          jobId: jobObjectId,
+          candidateId: candidateObjectId,
+        });
+    
+        // 2. Create and insert rejection notification
+        const message = `😞 Unfortunately, you have not been selected for the position.`;
+        const notification = {
+          userId: new ObjectId(userId),
+          type: "stageProgress",
+          message,
+          data: { jobId, status: "rejected" },
+          isRead: false,
+          createdAt: new Date(),
+        };
+    
+        await notificationCollection.insertOne(notification);
+    
+        // 3. Emit socket event if user is online
+        if (userId && onlineUsers[userId]) {
+          io.to(onlineUsers[userId]).emit("stageProgress", {
+            message,
+            jobId,
+            status: "rejected",
+          });
+        }
+    
+        res.status(200).json({ message: "Candidate rejected and notified successfully" });
+      } catch (err) {
+        console.error("Error rejecting candidate:", err);
+        res.status(500).json({ message: "Error rejecting candidate", error: err });
+      }
+    });
+    
 
     // PATCH /jobs/advanceStage/:jobId/:userId
 
